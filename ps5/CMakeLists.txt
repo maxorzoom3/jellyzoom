@@ -83,6 +83,23 @@ add_library(samples OBJECT
 	src/launcher.cpp
 	src/samples.cpp
 	src/example_ps5.cpp
+	src/jf/http_client.c
+	src/jf/jellyfin.c
+	src/jf/capabilities.c
+	src/jf/jf_identity.c
+	src/jf/jf_gate.cpp
+	src/jf/jf_tls.cpp
+	src/jf/jf_probe.cpp
+	src/jf/jf_avio.cpp
+	src/jf/jf_player.cpp
+	src/jf/jf_locale.c
+	src/jf/jf_net.c
+	src/jf/jf_vdec_probe.c
+	src/jf/jf_audio_probe.c
+	src/jf/jf_hdrlab.cpp
+	src/jf/jf_hdrpass.cpp
+	src/jf/jf_backdrop.cpp
+	src/jf/jf_hwdec.cpp
 	${platform_source})
 target_compile_definitions(samples PRIVATE
 	VK_EXAMPLE_PS5
@@ -101,13 +118,38 @@ target_include_directories(samples PRIVATE
 	${ROOT}/external/ktx/other_include
 	${ROOT}/base
 	third_party/volk
-	src)
+	src
+	src/jf
+	src/jf/include)
 set_target_properties(samples PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON C_STANDARD 11)
+# Stage 18: dav1d (ps5/tools/build-dav1d.sh) when the project has it; AV1 files are refused without it
+set(JF_DAV1D_LIB ${ROOT}/vendor/dav1d-ps5/lib/libdav1d.a)
+set(JF_EXTRA_LIBS)
+# Stage 43: the version (the file VERSION) and the real path of the project, so the build leaves no path of this computer in the program
+file(STRINGS ${ROOT}/VERSION JF_APP_VERSION_TEXT LIMIT_COUNT 1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${ROOT}/VERSION)
+target_compile_definitions(samples PRIVATE "JF_APP_VERSION=\"${JF_APP_VERSION_TEXT}\"")
+get_filename_component(JF_ROOT_REAL "${ROOT}" REALPATH)
+# Stage 24: ps5/tools/build-release.sh puts a .release marker in the project; a release build never reads config.h (jf_config.h)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${ROOT}/.release)
+if(EXISTS ${ROOT}/.release)
+	target_compile_definitions(samples PRIVATE JF_RELEASE)
+	message(STATUS "Release build: no built-in server or login")
+endif()
+if(EXISTS ${JF_DAV1D_LIB})
+	target_compile_definitions(samples PRIVATE JF_HAVE_DAV1D)
+	target_include_directories(samples PRIVATE ${ROOT}/vendor/dav1d-ps5/include)
+	set(JF_EXTRA_LIBS ${JF_DAV1D_LIB})
+	message(STATUS "AV1: dav1d found in vendor/dav1d-ps5")
+else()
+	message(STATUS "AV1: no vendor/dav1d-ps5 (run ps5/tools/build-dav1d.sh)")
+endif()
+set_source_files_properties(src/jf/http_client.c src/jf/jellyfin.c src/jf/capabilities.c PROPERTIES COMPILE_OPTIONS "-w")
 # Every unit sees volk's declarations first: the Vulkan commands are volk's
 # pointers, filled from the RADV linked into the title.
 # -fno-omit-frame-pointer: the console's crash backtraces are frame-pointer walks.
 target_compile_options(samples PRIVATE
-	-O2 -g1 -ffunction-sections -fdata-sections -fno-omit-frame-pointer
+	-O2 -g1 -ffunction-sections -fdata-sections -fno-omit-frame-pointer "-ffile-prefix-map=${JF_ROOT_REAL}=."
 	"SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/third_party/volk/volk.h")
 
 # The UI module, when the title has it: PS5_VKHomebrewUI's kit, GPL-3.0-or-later
@@ -127,8 +169,8 @@ endif()
 # Link, sign and package: the title folder in dist/<TITLE_ID>/
 add_custom_command(
 	OUTPUT ${CMAKE_BINARY_DIR}/eboot.elf
-	COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/link-title.sh ${CMAKE_BINARY_DIR} ${PS5_VULKAN_DIR} ${PS5_PAYLOAD_SDK} "$<TARGET_OBJECTS:samples>"
-	DEPENDS samples "$<TARGET_OBJECTS:samples>" ${CMAKE_CURRENT_SOURCE_DIR}/tools/link-title.sh
+	COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/link-title.sh ${CMAKE_BINARY_DIR} ${PS5_VULKAN_DIR} ${PS5_PAYLOAD_SDK} "$<TARGET_OBJECTS:samples>" ${CMAKE_CURRENT_SOURCE_DIR}/src/jf/lib/libjf_deps.a ${JF_EXTRA_LIBS}
+	DEPENDS samples "$<TARGET_OBJECTS:samples>" ${CMAKE_CURRENT_SOURCE_DIR}/src/jf/lib/libjf_deps.a ${JF_EXTRA_LIBS} ${CMAKE_CURRENT_SOURCE_DIR}/tools/link-title.sh
 	COMMAND_EXPAND_LISTS
 	VERBATIM)
 add_custom_target(title ALL DEPENDS ${CMAKE_BINARY_DIR}/eboot.elf)

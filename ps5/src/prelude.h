@@ -64,3 +64,8 @@
 #if defined(PS5_UI)
 #include "kit.hpp"
 #endif
+#include "jf/jf_gate.h"
+#include "jf_library.hpp"
+#include "jf/jf_player.h"
+#include "ui/components/media_controls.hpp"
+#include "jf/jf_qr.hpp"

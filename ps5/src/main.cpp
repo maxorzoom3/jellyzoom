@@ -369,12 +369,17 @@ void runMenu()
 
 } // namespace
 
+extern "C" int jf_vdec_probe(void);
+extern "C" int jf_audio_probe(void);
+
 int main()
 {
 	platform_init(PS5_TITLE_NAME);
 	// The samples report on std::cout and std::cerr: both reach klog
 	std::cout.rdbuf(std::cerr.rdbuf());
 	pad_open();
+	(void)jf_vdec_probe();
+	(void)jf_audio_probe();
 #if defined(PS5_HOST_REFERENCE)
 	// The PC's Vulkan loader
 	if (volkInitialize() != VK_SUCCESS) {

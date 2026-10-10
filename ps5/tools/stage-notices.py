@@ -98,6 +98,10 @@ def main():
     # The title: its own code, the foundation and the libraries in its tree
     rev, dirty, remote = revision(ROOT)
     write_text(out / "title/LICENSE.md", ROOT, rev, "LICENSE.md")
+    try:
+        write_text(out / "title/MIT-VulkanExamples.md", ROOT, rev, "ps5/licenses/MIT-VulkanExamples.md")
+    except subprocess.CalledProcessError:  # not committed yet: a development build, not a release
+        shutil.copy2(PS5 / "licenses/MIT-VulkanExamples.md", out / "title/MIT-VulkanExamples.md")
     libraries = [("external/imgui/LICENSE.txt", "imgui-LICENSE.txt"), ("external/ktx/LICENSE.md", "ktx-LICENSE.md"),
                  ("external/ktx/NOTICE.md", "ktx-NOTICE.md"), ("external/tinygltf/LICENSE", "tinygltf-LICENSE"),
                  ("ps5/third_party/volk/LICENSE.md", "volk-LICENSE.md")]

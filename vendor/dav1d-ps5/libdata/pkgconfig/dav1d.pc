@@ -1,0 +1,9 @@
+prefix=/mnt/data/ps5stack/PS5_JellyfinWheel/vendor/dav1d-ps5
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: libdav1d
+Description: AV1 decoding library
+Version: 1.5.1
+Libs: -L${libdir} -ldav1d -pthread
+Cflags: -I${includedir} -pthread

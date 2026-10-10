@@ -3,3 +3,12 @@ dist/
 klog/
 .deps/
 imgui.ini
+ps5/src/jf/config.h
+.release
+.build-dav1d/
+*.tgz
+*.log
+.env
+.env.*
+__pycache__/
+

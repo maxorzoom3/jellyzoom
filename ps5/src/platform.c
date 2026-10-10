@@ -368,24 +368,79 @@ pad_light_bar(uint8_t r, uint8_t g, uint8_t b)
 
 #define AUDIO_GRAIN 256
 #define AUDIO_ALREADY_INITIALISED ((int)0x8026000e)
+/* sceAudioOutOpen's last argument: 16-bit stereo, 16-bit 7.1 (EVO Player ran both on a 12.70 console) */
+#define AUDIO_FORMAT_S16_STEREO 1u
+#define AUDIO_FORMAT_S16_8CH 2u
 
 static int32_t audio_port = -1;
 static pthread_t audio_thread;
+static bool audio_thread_up;
 static atomic_bool audio_running;
 static audio_fill_fn audio_fill;
 static void *audio_user;
+static audio_fill_fn audio_fill8;
+static audio_want_fn audio_want;
+static void *audio_user8;
+static int audio_channels = 2; /* what the open port has; the audio thread's alone while it runs */
+static bool audio_8_refused;
+
+void
+audio_set_surround(audio_fill_fn fill8, audio_want_fn want, void *user)
+{
+   audio_user8 = user;
+   audio_fill8 = fill8;
+   audio_want = want;
+}
+
+static int32_t
+audio_open_port(int channels)
+{
+   return sceAudioOutOpen(0xff, 0, 0, AUDIO_GRAIN, 48000,
+                          channels == 8 ? AUDIO_FORMAT_S16_8CH : AUDIO_FORMAT_S16_STEREO);
+}
 
 static void *
 audio_main(void *unused)
 {
    (void)unused;
    static int16_t grain[AUDIO_GRAIN * 2] __attribute__((aligned(64)));
+   static int16_t grain8[AUDIO_GRAIN * 8] __attribute__((aligned(64)));
    unsigned errors = 0;
    while (atomic_load(&audio_running)) {
-      audio_fill(grain, AUDIO_GRAIN, audio_user);
+      /* the output follows what the film's sound needs */
+      int want = 2;
+      if (audio_want != NULL && audio_fill8 != NULL && !audio_8_refused)
+         want = audio_want(audio_user8) == 8 ? 8 : 2;
+      if (want != audio_channels) {
+         (void)sceAudioOutOutput(audio_port, NULL); /* drain the grain still queued */
+         (void)sceAudioOutClose(audio_port);
+         audio_port = audio_open_port(want);
+         if (audio_port < 0 && want == 8) {
+            say("audio: %d-channel output refused (0x%08x), staying stereo", want, (unsigned)audio_port);
+            audio_8_refused = true;
+            want = 2;
+            audio_port = audio_open_port(2);
+         }
+         if (audio_port < 0) {
+            say("audio: the output was lost (0x%08x)", (unsigned)audio_port);
+            sceKernelUsleep(100000);
+            audio_channels = -1; /* try again on the next turn */
+            continue;
+         }
+         audio_channels = want;
+         say("audio: %s output on port %d", want == 8 ? "7.1 (8-channel)" : "48 kHz stereo", (int)audio_port);
+      }
+      const void *out;
+      if (audio_channels == 8) {
+         audio_fill8(grain8, AUDIO_GRAIN, audio_user8);
+         out = grain8;
+      } else {
+         audio_fill(grain, AUDIO_GRAIN, audio_user);
+         out = grain;
+      }
       /* Blocks for one grain: this is what paces the thread. An output that
        * stops taking grains is said once, not left to stall the program. */
-      if (sceAudioOutOutput(audio_port, grain) < 0) {
+      if (sceAudioOutOutput(audio_port, out) < 0) {
          if (errors++ == 0)
             say("audio: sceAudioOutOutput failed");
          sceKernelUsleep(5000);
@@ -398,7 +453,7 @@ audio_main(void *unused)
 bool
 audio_start(audio_fill_fn fill, void *user)
 {
-   if (audio_port >= 0 || fill == NULL)
+   if (audio_thread_up || fill == NULL)
       return false;
    const int init = sceAudioOutInit();
    if (init < 0 && init != AUDIO_ALREADY_INITIALISED) {
@@ -406,12 +461,13 @@ audio_start(audio_fill_fn fill, void *user)
       return false;
    }
    /* The system user's main port: 256 frames, 48 kHz, 16-bit stereo. */
-   audio_port = sceAudioOutOpen(0xff, 0, 0, AUDIO_GRAIN, 48000, 1);
+   audio_port = audio_open_port(2);
    if (audio_port < 0) {
       say("audio: sceAudioOutOpen 0x%08x", (unsigned)audio_port);
       audio_port = -1;
       return false;
    }
+   audio_channels = 2;
    audio_fill = fill;
    audio_user = user;
    atomic_store(&audio_running, true);
@@ -422,6 +478,7 @@ audio_start(audio_fill_fn fill, void *user)
       audio_port = -1;
       return false;
    }
+   audio_thread_up = true;
    say("audio: 48 kHz stereo on port %d", (int)audio_port);
    return true;
 }
@@ -429,10 +486,13 @@ audio_start(audio_fill_fn fill, void *user)
 void
 audio_stop(void)
 {
-   if (audio_port < 0)
+   if (!audio_thread_up)
       return;
    atomic_store(&audio_running, false);
    pthread_join(audio_thread, NULL);
-   (void)sceAudioOutClose(audio_port);
+   audio_thread_up = false;
+   if (audio_port >= 0)
+      (void)sceAudioOutClose(audio_port);
    audio_port = -1;
+   audio_channels = 2;
 }

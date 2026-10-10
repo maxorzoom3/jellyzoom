@@ -103,6 +103,13 @@ bool audio_start(audio_fill_fn fill, void *user);
 /* Stops the thread and closes the output; call it before what fill uses goes. */
 void audio_stop(void);
 
+/* Surround: while a film's sound has more than two channels the output is opened with eight (7.1 PCM: FL FR FC LFE BL BR SL SR)
+ * instead of two, and closed back to stereo afterwards. fill8 writes 256 frames of eight interleaved 16-bit channels (the
+ * same contract as audio_fill_fn, `count` frames); want(user) says, before each grain, how many channels the output should
+ * have now (2 or 8). The console may refuse eight channels: the output then stays stereo. */
+typedef int (*audio_want_fn)(void *user);
+void audio_set_surround(audio_fill_fn fill8, audio_want_fn want, void *user);
+
 #ifdef __cplusplus
 }
 #endif

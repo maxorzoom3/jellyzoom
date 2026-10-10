@@ -48,6 +48,8 @@ stub() {
 }
 stub libSceAgc vendor/ps5/sdk/stubs/agc_canary_link_stub.c
 stub libSceAgcDriver vendor/ps5/sdk/stubs/agc_driver_canary_link_stub.c
+cc -std=c11 -O2 -fPIC -c "$ps5/tools/stubs/videodec2_stub.c" -o "$work/link/obj/libSceVideodec2_stub.o"
+"$sdk/bin/prospero-lld" --shared -soname libSceVideodec2.prx -o "$work/link/stubs/libSceVideodec2.so" "$work/link/obj/libSceVideodec2_stub.o"
 
 # shellcheck source=/dev/null
 source "$vulkan/tools/radv-link.sh"
@@ -66,12 +68,14 @@ if $platform_has_localeconv && [[ " ${radv_link_flags[*]} " != *" --defsym=local
     printf '{\n    local:\n        localeconv;\n};\n' > "$work/link/localeconv-local.map"
     radv_link_flags+=(--defsym=localeconv=ps5_localeconv --version-script "$work/link/localeconv-local.map")
 fi
-radv_link_flags+=("@/mnt/data/ps5stack/weak-defsyms.rsp")
+defsyms=${PS5_WEAK_DEFSYMS:-$ps5/tools/weak-defsyms.rsp}
+[[ -f $defsyms ]] || defsyms=$root/../weak-defsyms.rsp
+radv_link_flags+=("@$defsyms")
 "$sdk/bin/prospero-lld" "${radv_linker_script[@]}" --eh-frame-hdr "${radv_link_flags[@]}" \
-    --version-script "$native/app-symbols.map" --exclude-libs=ALL \
+    --version-script "$native/app-symbols.map" --exclude-libs=ALL --wrap=sceVideoOutOpen --wrap=sceVideoOutRegisterBuffers2 --wrap=sceVideoOutSubmitFlip \
     -e _start -o "$work/link/llvm-pie.elf" \
     "$work/link/obj/app_crt.o" "${objects[@]}" \
-    "$work/link/stubs/libSceAgc.so" "$work/link/stubs/libSceAgcDriver.so" \
+    "$work/link/stubs/libSceAgc.so" "$work/link/stubs/libSceAgcDriver.so" "$work/link/stubs/libSceVideodec2.so" \
     "${radv_link_inputs[@]}" \
     --as-needed "$sdk"/target/lib/*.so
 # A title whose localeconv is still the console's reads every glTF fraction as 0
@@ -89,7 +93,7 @@ fi
 null_imports=$(comm -23 \
     <("$sdk/bin/llvm-nm" -D --undefined-only "$work/link/llvm-pie.elf" |
         awk '$1 == "U" { sub(/@.*/, "", $2); print $2 }' | sort -u) \
-    <(for library in "$sdk"/target/lib/*.so "$work/link/stubs/libSceAgc.so" "$work/link/stubs/libSceAgcDriver.so"; do
+    <(for library in "$sdk"/target/lib/*.so "$work/link/stubs/libSceAgc.so" "$work/link/stubs/libSceAgcDriver.so" "$work/link/stubs/libSceVideodec2.so"; do
         case ${library##*/} in libkernel_sys.so | libScePosixForWebKit.so) continue ;; esac
         "$sdk/bin/llvm-nm" -D --defined-only "$library" 2>/dev/null | awk '{ print $NF }'
     done | sort -u))
@@ -100,7 +104,7 @@ if [[ -n $null_imports ]]; then
 fi
 "$tool" link --in "$work/link/llvm-pie.elf" --out "$work/eboot.elf.new" \
     --stub-dir "$sdk/target/lib" --stub "$work/link/stubs/libSceAgc.so" \
-    --stub "$work/link/stubs/libSceAgcDriver.so" --module-sdk 0x02000009 \
+    --stub "$work/link/stubs/libSceAgcDriver.so" --stub "$work/link/stubs/libSceVideodec2.so" --module-sdk 0x02000009 \
     --companion-sdk 0x08050001 --file-name eboot.elf
 
 # The title folder

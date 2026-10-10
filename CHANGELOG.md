@@ -1,0 +1,14 @@
+# Changelog
+
+## 1.0.0-beta.1
+
+The first test build. Mortalfin is a native Jellyfin client for the PS5, drawn with Vulkan.
+
+- Sign in to your Jellyfin server from the console (address, then username and password); switch server or sign out from the menu.
+- Browse libraries on the cover wheel: films, shows, seasons, episodes, continue watching, next up, search.
+- Film and episode playback with a glass control bar, the title's logo, chapters and scrubbing on L2/R2.
+- HDR10 pictures are passed through; Dolby Vision plays as its HDR10 layer; other HDR is tone-mapped; AV1 plays (dav1d).
+- Sound: Dolby Digital, Dolby Digital Plus (including Atmos) and DTS can be sent to the soundbar as they are; everything else is decoded to PCM up to 7.1.
+- Subtitles: text subtitles from the server, picture subtitles (PGS, DVD) drawn by the app, in the black bar of a wide film when they fit.
+- Settings: sound output, soundbar delay, audio and subtitle language, subtitle size, next episode automatically, HDR brightness, optional Seerr (discover and request), About.
+- Plain http on your own network only (no https yet).

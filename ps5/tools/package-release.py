@@ -110,10 +110,28 @@ def main():
     if found:
         raise SystemExit(f"the title folder holds what a release never carries: {found}")
 
+    # Stage 24: the build must not carry the config.h server or login
+    secrets = {}
+    cfg = PS5 / "src/jf/config.h"
+    if cfg.is_file():
+        import re
+        for name, value in re.findall(r'#define\s+(JF_SERVER_HOST|JF_USERNAME|JF_PASSWORD)\s+"([^"]+)"', cfg.read_text()):
+            if len(value) >= 3:
+                secrets[name] = value.encode()
+    leaked = []
+    for path in folder.rglob("*"):
+        if path.is_file() and path.stat().st_size < 400 * 1024 * 1024:
+            blob = path.read_bytes()
+            for name, value in secrets.items():
+                if value in blob:
+                    leaked.append(f"{name} in {path.relative_to(folder)}")
+    if leaked:
+        raise SystemExit("the title carries the built-in login (" + "; ".join(leaked) +
+                         "); build it with ps5/tools/build-release.sh, then package")
     out = ROOT / "dist" / f"release-{args.tag}"
     shutil.rmtree(out, ignore_errors=True)
     (out / "source").mkdir(parents=True)
-    project = ROOT.name
+    project = "Mortalfin"
     zip_path = out / f"{project}-{args.tag}.zip"
     make_zip(folder, zip_path, when)
     files = check_zip(zip_path, folder)

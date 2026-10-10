@@ -132,3 +132,11 @@ void
 audio_stop(void)
 {
 }
+
+void
+audio_set_surround(audio_fill_fn fill8, audio_want_fn want, void *user)
+{
+   (void)fill8;
+   (void)want;
+   (void)user;
+}

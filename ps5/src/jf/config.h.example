@@ -1,0 +1,14 @@
+/* Copy this file to config.h and fill it in for a development build (ps5/tools/build.sh).
+ * config.h is ignored by git on purpose: it holds your server and login. A release build never reads it. */
+#pragma once
+
+#define JF_SERVER_HOST "192.168.1.10" /* your Jellyfin server */
+#define JF_SERVER_PORT 8096
+#define JF_SERVER_TLS 0
+#define JF_USERNAME "your-user"
+#define JF_PASSWORD "your-password"
+
+#define JF_CLIENT_NAME "Mortalfin"
+#define JF_CLIENT_VERSION "dev"
+#define JF_DEVICE_NAME "PlayStation 5"
+#define JF_DEVICE_ID "any-text-you-like-for-your-own-dev-console"
