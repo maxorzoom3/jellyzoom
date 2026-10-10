@@ -1,68 +1,184 @@
-# Mortalfin
+# Pagerr
 
-A native Jellyfin client for the PS5, drawn with Vulkan. Browse your library on a cover wheel, play films
-and shows with HDR and surround sound, all from the couch, with no browser and no web view.
+**A PIN-protected, single-file homelab dashboard.**
 
-> **Beta.** Mortalfin is in testing. It works, it has rough edges, and your bug reports are the point of
-> this release. See [docs/TESTING.md](docs/TESTING.md).
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
+![Self-hosted](https://img.shields.io/badge/Self--hosted-yes-22c55e)
+![Tailscale](https://img.shields.io/badge/Tailscale-friendly-4d8eff)
 
-Title ID `PPSA99141` · version in [`VERSION`](VERSION) · licence GPL-3.0 · built on the
-[PS5 Vulkan Template](https://github.com/mihawk-99/PS5_VulkanTemplate) and
-[BlackBearReloaded's UI kit](https://github.com/blackbearreloaded).
+Pagerr is a single HTML file that gives you a clean, mobile-first dashboard for all your self-hosted services. No database. No backend. No accounts. Everything lives in your browser's `localStorage`.
 
-## What it does
+Built for Tailscale. Works behind any reverse proxy.
 
-- **Your Jellyfin server, on the console.** Type the server's address, sign in, and your libraries appear:
-  films, shows, seasons and episodes, continue watching, next up, search.
-- **Cover-wheel interface.** Posters and backdrops on a wheel you turn with the stick or the d-pad.
-- **Playback.** Glass control bar with the title's logo, chapters, and scrubbing on L2/R2. Resumes where you left off,
-  plays the next episode if you ask it to.
-- **Picture.** HDR10 goes out as HDR10. Dolby Vision plays as its HDR10 layer. Other HDR is tone-mapped.
-  AV1 plays too (dav1d).
-- **Sound.** Dolby Digital, Dolby Digital Plus (so Atmos in Dolby Digital Plus) and DTS can be sent to your
-  soundbar untouched. Everything else is decoded to PCM, up to 7.1.
-- **Subtitles.** Text subtitles from the server, picture subtitles (PGS, DVD) drawn by the app, and on a widescreen film
-  they sit in the black bar when they fit.
-- **Settings.** Sound output, soundbar delay, audio and subtitle language, subtitle size, next episode automatically,
-  HDR brightness, optional [Seerr](https://github.com/seerr-team/seerr) (discover and request), and an About page.
+---
 
-## What it does not do (yet)
+## Features
 
-- **Plain `http` only**, on your own network. There is no `https` support in this build, so use an address like
-  `192.168.1.10:8096`, not a public name behind a reverse proxy.
-- **Dolby TrueHD and DTS-HD Master Audio are decoded to PCM**, not sent as they are: the PS5's audio output does not
-  carry them at full speed. You get the lossless sound, without the soundbar's Atmos label for TrueHD films.
-- No download or offline mode, no live TV, no music library, no background music.
+- **Single file** — the entire app is one `.html` file. Serve it anywhere
+- **PIN lock** — 4–6 digit PIN set on first launch, with optional biometric unlock
+- **Auto icon matching** — fetches service icons automatically from [dashboard-icons](https://github.com/homarr-labs/dashboard-icons)
+- **Categories** — organise services into labelled groups
+- **Reorder** — tap ⇅ reorder to rearrange services, swap across categories
+- **Auto-login** — stores credentials and auto-submits login forms for supported services
+- **JSON export / import** — back up your config or transfer it to another device
+- **Dark & light theme** — smooth, switchable
+- **Customisable display** — icon size, text size, toggleable service labels
+- **Custom branding** — upload your own server logo and name
+- **Add to home screen** — installs as a PWA on mobile for a full-screen app experience
+- **Zero tracking** — nothing leaves your device
 
-## Installing
+---
 
-You need a PS5 that runs homebrew apps. Mortalfin was developed on firmware 4.03.
+## Quickstart
 
-1. Get `Mortalfin-<version>.zip` from the [Releases](../../releases) page.
-2. Unzip it. You get one folder named `PPSA99141`.
-3. Install that folder with the homebrew app installer you normally use. Once Mortalfin is in the
-   Homebrew Store catalog, you can install it from there.
-4. Start Mortalfin from the home screen, enter your server's address, and sign in.
+```bash
+git clone https://github.com/mortaljinx/pagerr.git
+cd pagerr
+docker compose up -d
+```
 
-Mortalfin keeps its settings in the console's `/data` folder (files starting `jf-`). Deleting them resets Mortalfin.
+Open `http://your-server-ip:10000` — or your Tailscale IP if accessing remotely.
 
-## Reporting a bug
+On first launch you'll set a PIN and optionally a server name and logo.
 
-Please [open an issue](../../issues/new?template=bug_report.md). The template asks for what you need to say;
-[docs/TESTING.md](docs/TESTING.md) says what to try and how to capture the log.
+---
 
-## Building it yourself
+## Serve Without Docker
 
-See [docs/BUILDING.md](docs/BUILDING.md). Releasing: [docs/RELEASING.md](docs/RELEASING.md).
+Because Pagerr is a single HTML file you can serve it with anything:
 
-## Licence
+```bash
+# Python
+python3 -m http.server 10000
 
-Mortalfin as distributed is under the **GPL-3.0** ([LICENSE.md](LICENSE.md)), because it links GPL-3.0 parts
-(the UI kit, the PS5 platform layer). Parts under other licences keep them: Sascha Willems' Vulkan examples (MIT,
-[ps5/licenses/MIT-VulkanExamples.md](ps5/licenses/MIT-VulkanExamples.md)), Dear ImGui, libktx, tinygltf, volk,
-dav1d (BSD-2-Clause), the kit's fonts (OFL-1.1, Bitstream Vera) and others. Every part, its licence and its
-source are listed in the `licenses/` folder inside the title and in `ps5/ASSETS.md`.
+# Node
+npx serve . -p 10000
+```
 
-Mortalfin is not affiliated with or endorsed by Jellyfin or Sony Interactive Entertainment.
-"PlayStation" and "PS5" are trademarks of Sony Interactive Entertainment Inc. Jellyfin is a trademark of its project.
-It contains no games, no firmware and no keys, and plays only what is on your own server.
+Or just open `pagerr.html` directly in a browser.
+
+---
+
+## Docker Compose
+
+```yaml
+services:
+  pagerr:
+    image: nginx:alpine
+    container_name: pagerr
+    ports:
+      - "10000:80"
+    volumes:
+      - ./pagerr.html:/usr/share/nginx/html/index.html:ro
+    restart: unless-stopped
+```
+
+---
+
+## Updating
+
+```bash
+git pull
+docker restart pagerr
+```
+
+Your data lives in `localStorage` in your browser — updating never touches your services or settings.
+
+---
+
+## Backup & Restore
+
+Settings → **Export JSON** saves a `pagerr-config.json` file with all your services, categories, and settings.
+
+To restore or move to another device: Settings → **Import JSON** → pick the file.
+
+Keep a copy of your export somewhere safe. If you clear your browser storage, this is your only recovery option.
+
+---
+
+## Auto-Login Support
+
+Pagerr can auto-submit credentials for the following services:
+
+| Service | Method |
+|---|---|
+| Radarr / Sonarr / Lidarr / Prowlarr / Readarr | Form POST |
+| SABnzbd | Form POST |
+| qBittorrent | Form POST |
+| Deluge | Form POST |
+| Transmission | Basic Auth |
+| NZBGet | Basic Auth |
+| Tautulli | Form POST |
+| Pi-hole | Form POST |
+| Wizarr | Form POST |
+
+Services not listed will open normally. Your browser remembers the session after the first manual login.
+
+> Auto-login works best when Pagerr and your services share the same domain or are on the same Tailscale network. Some services block cross-origin requests regardless of configuration.
+
+---
+
+## Access Methods
+
+### Tailscale (recommended)
+
+Run Pagerr on your server and access it from any device on your tailnet without opening any ports.
+
+```
+http://your-tailscale-ip:10000
+```
+
+### Reverse Proxy
+
+Pagerr works behind Traefik, Caddy, Nginx Proxy Manager, or any other proxy. Point it at the container port and you're done.
+
+---
+
+## Install as Home Screen App
+
+Pagerr works as a PWA — add it to your phone home screen for a full-screen, app-like experience.
+
+**iOS (Safari):** Share → Add to Home Screen
+
+**Android (Chrome):** Menu → Add to Home Screen / Install App
+
+---
+
+## Browser Compatibility
+
+| Feature | Chrome | Firefox | Safari | Edge |
+|---|---|---|---|---|
+| PIN lock | ✅ | ✅ | ✅ | ✅ |
+| Biometric unlock | ⚠️ | ✅ | ⚠️ | ⚠️ |
+| Add to home screen | ✅ | ✅ | ✅ | ✅ |
+| Auto-login | ✅ | ✅ | ✅ | ✅ |
+
+Biometric support outside Firefox depends on your OS and browser version. PIN is always available as a fallback.
+
+---
+
+## Security Notes
+
+- All data is stored in your browser's `localStorage` — nothing is sent anywhere
+- Credentials are stored in plaintext in `localStorage` — the lock screen is a convenience lock, not encryption
+- Serving over HTTPS is strongly recommended — Tailscale handles this automatically
+- For reverse proxy setups, terminate TLS at the proxy level
+
+---
+
+## Personal Project
+
+Pagerr is a personal project. It is shared publicly for anyone who finds it useful but is **not actively maintained as an open source project**. Issues and pull requests are not monitored.
+
+If it works for you, great. If something is broken, feel free to fork it.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE) for details.
+
+---
+
+*Built for homelabbers, by a homelabber.*
