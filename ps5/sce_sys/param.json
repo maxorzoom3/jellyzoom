@@ -2,7 +2,7 @@
   "ageLevel": {
     "default": 0
   },
-  "applicationCategoryType": 0,
+  "applicationCategoryType": 65536,
   "applicationDrmType": "free",
   "attribute": 1644167168,
   "attribute2": 0,
