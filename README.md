@@ -97,7 +97,7 @@ submitted. Until it appears, use the manual install below.)*
    `/data/homebrew/PPSA99141/eboot.bin` exists. Create `/data/homebrew` first if it isn't there.
 4. After a moment, a **Mortalfin** tile appears on the home screen. If it doesn't, run your payloads again, or reboot
    and jailbreak again.
-5. Open Mortalfin, pick your server from the list or type its address (for example `192.168.1.20:8096`), and sign in.
+5. Open Mortalfin, pick your server from the list or type its address (for example `192.168.1.10:8096`), and sign in.
    **Quick Connect** is quickest: scan the QR code with your phone and tap *Authorize*.
 
 Mortalfin remembers your accounts and settings.
@@ -137,7 +137,7 @@ what your library is missing and let you request it. Seerr needs Jellyfin as its
 permission to request.
 
 Turn it on under *Settings → Seerr*. Use Seerr's address **on your own network** (for example
-`http://192.168.1.20:5055`); a public name that only works from outside your home won't work from the PS5. *Test
+`http://192.168.1.10:5055`); a public name that only works from outside your home won't work from the PS5. *Test
 connection* checks the address and your sign-in. Mortalfin keeps only Seerr's session, never a password.
 
 ## Formats and limits
@@ -154,7 +154,7 @@ Limits of the platform, and of this beta:
 - **Dolby TrueHD and DTS-HD MA are decoded to PCM, never sent as they are.** The PS5's audio output can't carry them
   at full speed (I tried): you get the lossless sound, without the soundbar's Atmos label on a TrueHD film.
   Atmos in Dolby Digital Plus does pass through.
-- **Plain `http` only**, on your own network, for now. Use an address like `192.168.1.20:8096`; a public name behind a
+- **Plain `http` only**, on your own network, for now. Use an address like `192.168.1.10:8096`; a public name behind a
   reverse proxy won't connect.
 - No true 24p output: the display runs at the console's own refresh rate.
 - No downloads or offline mode, no live TV, no music library, no background music.
@@ -167,7 +167,7 @@ Limits of the platform, and of this beta:
 | No Mortalfin tile | Check the path is exactly `/data/homebrew/PPSA99141/eboot.bin`, then rerun your payloads, or reboot and jailbreak again. |
 | The upload fails ("Text file busy") | Mortalfin is still running: close it first. |
 | Your server isn't listed | Type its address. Discovery needs UDP port 7359; in Docker, publish `7359/udp`, and in Jellyfin turn on *Enable auto discovery*. |
-| It can't connect | The PS5 can't resolve names: use the server's IP address and port (for example `192.168.1.20:8096`), over `http`. |
+| It can't connect | The PS5 can't resolve names: use the server's IP address and port (for example `192.168.1.10:8096`), over `http`. |
 | A film has no sound or crackles | Try another *Sound output*: Auto, Bitstream or PCM. Include the film's audio codec in a report. |
 | The receiver shows PCM, not Dolby | Turn on *Bitstream*. Only Dolby Digital, Dolby Digital Plus and DTS core can be sent as they are. |
 | Subtitles don't show | Switch them on with △ in the player; picture subtitles (PGS) appear once chosen. |
