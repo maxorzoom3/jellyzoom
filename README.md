@@ -13,6 +13,7 @@
   <img alt="Vulkan" src="https://img.shields.io/badge/graphics-Vulkan%20(RADV)-ac162c">
   <img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-555">
   <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-c06">
+  <a href="https://discord.gg/PmSvYChzd"><img alt="Discord" src="https://img.shields.io/badge/chat-Discord-5865F2?logo=discord&logoColor=white"></a>
 </p>
 
 <p align="center">
@@ -184,6 +185,10 @@ Mortalfin talks to your Jellyfin server and, if you turn it on, your Seerr serve
 analytics, no accounts of its own and no ads. The release build contains no server address, user name or password:
 you type them in, and they are kept on your console only. Each console makes its own random device ID the first time it
 runs (`/data/jf-device-id`). The debug log is sent only to a computer that you connect to the console's debug port.
+
+## Community and testing
+
+Join the [Mortalfin Discord](https://discord.gg/PmSvYChzd) to try the beta, ask for help, send bug reports with your klog, and follow new releases.
 
 ## Building
 
