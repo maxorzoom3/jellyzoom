@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.0-beta.2
+- Fixed: accented letters (Czech, Polish, Hungarian, Turkish and more) and Cyrillic now show in the UI and in subtitles
+- Changed: the app now sits under Media on the home screen
+
 ## 1.0.0-beta.1
 
 The first test build. Mortalfin is a native Jellyfin client for the PS5, drawn with Vulkan.
