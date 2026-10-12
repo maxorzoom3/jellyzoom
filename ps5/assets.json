@@ -27,8 +27,8 @@
     },
     {
       "path": "hui/fonts/inter-regular.huifont",
-      "from": "kit",
-      "source": "assets/fonts/inter-regular.huifont",
+      "from": "file",
+      "source": "ps5/assets/fonts/inter-regular.huifont",
       "used_by": [
         "@ui"
       ],
@@ -36,13 +36,13 @@
       "author": "The Inter Project Authors",
       "licence": "OFL-1.1",
       "url": "https://github.com/rsms/inter",
-      "changes": "a signed-distance-field atlas, made by ps5-homebrew-ui's tools/bake-fonts.sh",
+      "changes": "a signed-distance-field atlas, made by ps5-homebrew-ui's tools/font-baker with the european glyph set (accented Latin and Cyrillic) at 2048",
       "licence_file": "kit:assets/fonts/Inter-LICENSE.txt"
     },
     {
       "path": "hui/fonts/inter-semibold.huifont",
-      "from": "kit",
-      "source": "assets/fonts/inter-semibold.huifont",
+      "from": "file",
+      "source": "ps5/assets/fonts/inter-semibold.huifont",
       "used_by": [
         "@ui"
       ],
@@ -50,13 +50,13 @@
       "author": "The Inter Project Authors",
       "licence": "OFL-1.1",
       "url": "https://github.com/rsms/inter",
-      "changes": "a signed-distance-field atlas, made by ps5-homebrew-ui's tools/bake-fonts.sh",
+      "changes": "a signed-distance-field atlas, made by ps5-homebrew-ui's tools/font-baker with the european glyph set (accented Latin and Cyrillic) at 2048",
       "licence_file": "kit:assets/fonts/Inter-LICENSE.txt"
     },
     {
       "path": "hui/fonts/montserrat-medium.huifont",
-      "from": "kit",
-      "source": "assets/fonts/montserrat-medium.huifont",
+      "from": "file",
+      "source": "ps5/assets/fonts/montserrat-medium.huifont",
       "used_by": [
         "@ui"
       ],
@@ -64,7 +64,7 @@
       "author": "The Montserrat Project Authors",
       "licence": "OFL-1.1",
       "url": "https://github.com/JulietaUla/Montserrat",
-      "changes": "a signed-distance-field atlas, made by ps5-homebrew-ui's tools/bake-fonts.sh",
+      "changes": "a signed-distance-field atlas, made by ps5-homebrew-ui's tools/font-baker with the european glyph set (accented Latin and Cyrillic) at 2048",
       "licence_file": "kit:assets/fonts/Montserrat-LICENSE.txt"
     },
     {
