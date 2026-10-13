@@ -185,6 +185,32 @@ def main():
         source=dict(kind="fixed", revision="ps5-payload-dev SDK v0.42 release archives",
                     url="https://github.com/ps5-payload-dev/sdk/releases/tag/v0.42")))
 
+    # The https tunnel (ps5/src/jf/jf_tls.cpp): Mbed TLS, and Mozilla's root certificates
+    def licence_text(dest, path):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            write_text(dest, ROOT, rev, path)
+        except subprocess.CalledProcessError:  # not committed yet: a development build, not a release
+            shutil.copy2(ROOT / path, dest)
+
+    licence_text(out / "mbedtls/LICENSE.txt", "ps5/licenses/mbedtls-LICENSE.txt")
+    parts.append(dict(
+        id="mbedtls", name="Mbed TLS 3.6.7, the TLS client behind https (built by ps5/tools/build-mbedtls.sh)",
+        licence="Apache-2.0 (Mbed TLS is Apache-2.0 OR GPL-2.0-or-later; it is used here under Apache-2.0)",
+        copyright=["Copyright The Mbed TLS Contributors"],
+        artifacts=["eboot.bin"], texts="licenses/mbedtls/",
+        source=dict(kind="fixed", revision="Mbed TLS 3.6.7 release tarball, sha256 "
+                                           "a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6",
+                    url="https://github.com/Mbed-TLS/mbedtls/releases/tag/mbedtls-3.6.7")))
+    licence_text(out / "mozilla-ca/MPL-2.0.txt", "ps5/licenses/MPL-2.0.txt")
+    parts.append(dict(
+        id="mozilla-ca", name="Mozilla's list of trusted root certificates (data, from the certifi 2026.7.22 copy), "
+                              "embedded as ps5/src/jf/jf_ca_bundle.inc",
+        licence="MPL-2.0", copyright=["Copyright the Mozilla Foundation and the contributors to its root programme"],
+        artifacts=["eboot.bin"], texts="licenses/mozilla-ca/",
+        source=dict(kind="fixed", revision="certifi 2026.7.22 (cacert.pem); the embedded copy is in the title's source",
+                    url="https://github.com/certifi/python-certifi")))
+
     (out / "components.json").write_text(json.dumps(parts, indent=1, ensure_ascii=False) + "\n")
     has_kit = any(p["id"] == "ui-kit" for p in parts)
     legal = LEGAL.format(name=name, rule="=" * (len(name) + 12), kit=" and the UI kit" if has_kit else "",

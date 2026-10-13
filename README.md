@@ -161,6 +161,30 @@ Limits of the platform, and of this beta:
 - No downloads or offline mode, no live TV, no music library, no background music.
 - The app can't quit itself: close it with the PS button.
 
+## Connecting with a domain name (https)
+
+The setup screen takes an IP address, a name, or an `https://` address. If your server sits behind a reverse proxy
+(Traefik, Caddy, nginx), enter the address you use in a browser, for example `https://jellyfin.example.com`; with no port
+it uses 443. This lets people who are not on your network connect.
+
+- The app opens a small tunnel inside the console: it looks the name up with its own DNS client (so a DNS server that
+  blocks Sony still blocks Sony), does the TLS, and hands the rest of the app plain traffic on the console itself.
+- TLS 1.2, with the certificate and its name checked against Mozilla's root list. Let's Encrypt works. A server that only
+  offers TLS 1.3 does not connect yet.
+- The console's clock has to be right, or every certificate looks expired or not yet valid.
+- Pictures load a little slower over the internet than on your LAN, because each one is a separate secure connection.
+
+Files you can put on the console (in `/data`; they are read when the app starts, so restart it after a change):
+
+| File | What it does |
+| --- | --- |
+| `/data/jf-dns` | The DNS server to ask, as an address on one line, when the console's own does not answer |
+| `/data/jf-hosts` | Fixed names, one per line: `192.168.1.10 jellyfin.example.com` |
+| `/data/jf-ca.pem` | Extra trusted roots, for a server whose certificate comes from your own authority |
+| `/data/jf-tls-insecure` | Any content: turns certificate checking off. For testing only; the app logs a warning |
+
+Nothing of yours is in the download: the address, user name and keys you enter are stored on your own console.
+
 ## Troubleshooting
 
 | Problem | What to do |
@@ -196,6 +220,8 @@ See [docs/BUILDING.md](docs/BUILDING.md). Releasing and the security check: [doc
 
 ## Credits
 
+- Mbed TLS (Apache-2.0) and Mozilla's root certificate list (MPL-2.0) carry the https connection; their licences are in
+  `ps5/licenses/` and in the `licenses/` folder beside `eboot.bin`.
 Mortalfin stands on the work of others in the PS5 scene and beyond. Thank you to:
 
 - **[Mihawk](https://github.com/mihawk-99)**, for the [PS5 Vulkan Template](https://github.com/mihawk-99/PS5_VulkanTemplate)

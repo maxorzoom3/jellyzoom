@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-beta.3 (not released yet)
+
+- Added: https and domain names. Enter `https://your.domain` on the setup screen to connect through a reverse proxy
+  (Traefik, Caddy, nginx) from outside your network; plain IP addresses and `http://` still work.
+- The app does its own DNS lookups for names (`/data/jf-dns`, `/data/jf-hosts`), so a DNS server that blocks Sony is respected.
+- Certificates are checked against Mozilla's root list and `/data/jf-ca.pem`; `/data/jf-tls-insecure` turns the check off.
+- Seerr works with an https address too.
+- Credits: Mbed TLS (Apache-2.0) and Mozilla's root certificates (MPL-2.0).
+- Known: pictures load more slowly over the internet than on a LAN (one secure connection each); a server that only offers
+  TLS 1.3 is not supported yet.
+
 ## 1.0.0-beta.2
 - Fixed: accented letters (Czech, Polish, Hungarian, Turkish and more) and Cyrillic now show in the UI and in subtitles
 - Changed: the app now sits under Media on the home screen
