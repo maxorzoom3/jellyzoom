@@ -144,6 +144,17 @@ if(EXISTS ${JF_DAV1D_LIB})
 else()
 	message(STATUS "AV1: no vendor/dav1d-ps5 (run ps5/tools/build-dav1d.sh)")
 endif()
+# Stage 45: mbedTLS (ps5/tools/build-mbedtls.sh) for https; without it an https address is refused with a message
+set(JF_MBEDTLS_DIR ${ROOT}/vendor/mbedtls-ps5)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${JF_MBEDTLS_DIR}/lib/libmbedtls.a)
+if(EXISTS ${JF_MBEDTLS_DIR}/lib/libmbedtls.a)
+	target_compile_definitions(samples PRIVATE JF_HAVE_MBEDTLS)
+	target_include_directories(samples PRIVATE ${JF_MBEDTLS_DIR}/include)
+	list(APPEND JF_EXTRA_LIBS ${JF_MBEDTLS_DIR}/lib/libmbedtls.a ${JF_MBEDTLS_DIR}/lib/libmbedx509.a ${JF_MBEDTLS_DIR}/lib/libmbedcrypto.a)
+	message(STATUS "https: mbedTLS found in vendor/mbedtls-ps5")
+else()
+	message(STATUS "https: no vendor/mbedtls-ps5 (run ps5/tools/build-mbedtls.sh)")
+endif()
 set_source_files_properties(src/jf/http_client.c src/jf/jellyfin.c src/jf/capabilities.c PROPERTIES COMPILE_OPTIONS "-w")
 # Every unit sees volk's declarations first: the Vulkan commands are volk's
 # pointers, filled from the RADV linked into the title.

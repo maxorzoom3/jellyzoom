@@ -12,3 +12,5 @@ ps5/src/jf/config.h
 .env.*
 __pycache__/
 
+vendor/mbedtls-ps5/
+.build-mbedtls/
