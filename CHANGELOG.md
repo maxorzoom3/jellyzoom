@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0-beta.3 (not released yet)
+## 1.0.0-beta.3 (2026-10-13)
 
 - Added: https and domain names. Enter `https://your.domain` on the setup screen to connect through a reverse proxy
   (Traefik, Caddy, nginx) from outside your network; plain IP addresses and `http://` still work.
