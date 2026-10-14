@@ -32,8 +32,14 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+#if defined(__has_include)
+#if __has_include(<netinet/tcp.h>)
+#include <netinet/tcp.h>
+#endif
+#endif
 
 #if defined(JF_HAVE_MBEDTLS)
+#define MBEDTLS_ALLOW_PRIVATE_ACCESS // the session's id and ticket, to see whether the server gave a new one
 #include <mbedtls/entropy.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/error.h>
@@ -49,6 +55,9 @@
 #endif
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
+#endif
+#ifndef TCP_NODELAY
+#define TCP_NODELAY 1
 #endif
 
 namespace {
@@ -123,6 +132,14 @@ std::string trim(std::string s)
 		a++;
 	}
 	return s.substr(a);
+}
+
+// Small writes go out at once (the TLS handshake and every request are a few small writes, and waiting for the
+// acknowledgement of the first one would add a round trip to each)
+void noDelay(int fd)
+{
+	int one = 1;
+	::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 }
 
 std::string lowerCase(std::string s)
@@ -333,7 +350,21 @@ bool resolveName(const std::string &rawName, in_addr *out)
 
 #if defined(JF_HAVE_MBEDTLS)
 
+// The last TLS session with each server: a new connection offers it, and a server that accepts it skips the
+// certificate and key exchange (most of the time a handshake takes, on the console's processor)
+struct SavedSession {
+	std::string name;
+	mbedtls_ssl_session s;
+	std::time_t when{ 0 };
+	SavedSession() { mbedtls_ssl_session_init(&s); }
+	~SavedSession() { mbedtls_ssl_session_free(&s); }
+	SavedSession(const SavedSession &) = delete;
+	SavedSession &operator=(const SavedSession &) = delete;
+};
+
 struct TlsShared {
+	std::mutex sessionLock;
+	std::vector<std::unique_ptr<SavedSession>> sessions;
 	std::mutex lock;
 	bool tried{ false };
 	bool ok{ false };
@@ -493,6 +524,30 @@ std::string certProblem(uint32_t flags, const std::string &name)
 	return text;
 }
 
+bool sameSession(const mbedtls_ssl_session &a, const mbedtls_ssl_session &b)
+{
+	if (a.MBEDTLS_PRIVATE(id_len) != b.MBEDTLS_PRIVATE(id_len) ||
+		std::memcmp(a.MBEDTLS_PRIVATE(id), b.MBEDTLS_PRIVATE(id), a.MBEDTLS_PRIVATE(id_len)) != 0) {
+		return false;
+	}
+	if (a.MBEDTLS_PRIVATE(ticket_len) != b.MBEDTLS_PRIVATE(ticket_len)) {
+		return false;
+	}
+	return a.MBEDTLS_PRIVATE(ticket_len) == 0 ||
+		std::memcmp(a.MBEDTLS_PRIVATE(ticket), b.MBEDTLS_PRIVATE(ticket), a.MBEDTLS_PRIVATE(ticket_len)) == 0;
+}
+
+void forgetSession(const std::string &name)
+{
+	std::lock_guard<std::mutex> g(shared.sessionLock);
+	for (size_t i = 0; i < shared.sessions.size(); i++) {
+		if (shared.sessions[i]->name == name) {
+			shared.sessions.erase(shared.sessions.begin() + static_cast<long>(i));
+			return;
+		}
+	}
+}
+
 // The handshake, on a blocking socket with a time limit. Afterwards the socket is non-blocking.
 bool tlsConnect(TlsConn &c, int fd, const std::string &name, std::string &why)
 {
@@ -506,6 +561,17 @@ bool tlsConnect(TlsConn &c, int fd, const std::string &name, std::string &why)
 		return false;
 	}
 	mbedtls_ssl_set_bio(&c.ssl, &c.fd, bioSend, bioRecv, nullptr);
+	bool offered = false;
+	{
+		std::lock_guard<std::mutex> g(shared.sessionLock);
+		for (const auto &e : shared.sessions) {
+			if (e->name == name && std::time(nullptr) - e->when < 3600) {
+				offered = mbedtls_ssl_set_session(&c.ssl, &e->s) == 0;
+				break;
+			}
+		}
+	}
+	const auto began = std::chrono::steady_clock::now();
 	timeval tv;
 	tv.tv_sec = 5;
 	tv.tv_usec = 0;
@@ -520,6 +586,9 @@ bool tlsConnect(TlsConn &c, int fd, const std::string &name, std::string &why)
 		if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
 			if (std::chrono::steady_clock::now() > limit) {
 				why = "the server did not answer the TLS handshake";
+				if (offered) {
+					forgetSession(name);
+				}
 				return false;
 			}
 			continue;
@@ -531,14 +600,47 @@ bool tlsConnect(TlsConn &c, int fd, const std::string &name, std::string &why)
 		} else {
 			why = "the TLS handshake failed: " + mbedText(r);
 		}
+		if (offered) {
+			forgetSession(name); // do not offer it again
+		}
 		return false;
 	}
 	tv.tv_sec = 0;
 	::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 	::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 	::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-	say("%s: %s, %s%s", name.c_str(), mbedtls_ssl_get_version(&c.ssl), mbedtls_ssl_get_ciphersuite(&c.ssl),
-		shared.insecure ? " (certificate not checked)" : "");
+	const long ms = static_cast<long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count());
+	{
+		// keep the session for the next connection. A server that gave a new id or ticket (it did not accept ours, or it
+		// renews tickets) replaces the one kept; the same one only has its time renewed
+		std::unique_ptr<SavedSession> fresh(new SavedSession());
+		if (mbedtls_ssl_get_session(&c.ssl, &fresh->s) == 0) {
+			std::lock_guard<std::mutex> g(shared.sessionLock);
+			const std::time_t now = std::time(nullptr);
+			size_t at = shared.sessions.size();
+			for (size_t i = 0; i < shared.sessions.size(); i++) {
+				if (shared.sessions[i]->name == name) {
+					at = i;
+					break;
+				}
+			}
+			if (at < shared.sessions.size() && sameSession(shared.sessions[at]->s, fresh->s)) {
+				shared.sessions[at]->when = now;
+			} else {
+				fresh->name = name;
+				fresh->when = now;
+				if (at < shared.sessions.size()) {
+					shared.sessions.erase(shared.sessions.begin() + static_cast<long>(at));
+				}
+				if (shared.sessions.size() >= 8) {
+					shared.sessions.erase(shared.sessions.begin());
+				}
+				shared.sessions.push_back(std::move(fresh));
+			}
+		}
+	}
+	say("%s: %s, %s, %ld ms%s%s", name.c_str(), mbedtls_ssl_get_version(&c.ssl), mbedtls_ssl_get_ciphersuite(&c.ssl), ms,
+		offered ? ", earlier session offered" : "", shared.insecure ? " (certificate not checked)" : "");
 	return true;
 }
 
@@ -628,6 +730,7 @@ int connectTo(const in_addr &ip, int port, int ms)
 	if (fd < 0) {
 		return -1;
 	}
+	noDelay(fd);
 	::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
 	sockaddr_in sa;
 	std::memset(&sa, 0, sizeof(sa));
@@ -715,6 +818,7 @@ void relay(int cfd, const std::string &name, int port, bool tls)
 		return;
 	}
 #endif
+	noDelay(cfd);
 	::fcntl(cfd, F_SETFL, ::fcntl(cfd, F_GETFL, 0) | O_NONBLOCK);
 	::fcntl(ufd, F_SETFL, ::fcntl(ufd, F_GETFL, 0) | O_NONBLOCK);
 	Rewriter rw;

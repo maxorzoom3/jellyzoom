@@ -763,6 +763,18 @@ void fetchDetails(const JfSession &session, const std::string &id)
 			copyText(d->directors, sizeof(d->directors), directors);
 			copyText(d->cast, sizeof(d->cast), cast);
 		}
+		json_object *studios = jget(root, "Studios");
+		if (studios && json_object_is_type(studios, json_type_array)) {
+			std::string names;
+			const size_t count = std::min<size_t>(json_object_array_length(studios), 2);
+			for (size_t i = 0; i < count; i++) {
+				const std::string name = jstr(json_object_array_get_idx(studios, i), "Name");
+				if (!name.empty()) {
+					names += (names.empty() ? "" : ", ") + name;
+				}
+			}
+			copyText(d->studio, sizeof(d->studio), names);
+		}
 		json_object *sources = jget(root, "MediaSources");
 		json_object *source = (sources && json_object_is_type(sources, json_type_array) && json_object_array_length(sources) > 0)
 			? json_object_array_get_idx(sources, 0) : nullptr;

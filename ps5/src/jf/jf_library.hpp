@@ -196,6 +196,19 @@ inline int &discoverGo()
     static int value = 0;
     return value;
 }
+// A film page asks for the cast of its title: the design opens the Discover tab on that title's cast page, and Back returns
+struct CastRequest
+{
+    bool pending = false;
+    long long tmdb = 0;
+    char type[8] = {};   // "movie" or "tv"
+    char title[160] = {};
+};
+inline CastRequest &castRequest()
+{
+    static CastRequest value;
+    return value;
+}
 inline bool &discoverLeave()
 {
     static bool value = false;

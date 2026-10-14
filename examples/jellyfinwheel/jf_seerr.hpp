@@ -130,7 +130,7 @@ inline std::string unreachable(const std::string &host, int port)
 {
 	char problem[300] = "";
 	jf_tls_error(problem, sizeof(problem));
-	std::string text = problem[0] ? std::string(problem) : unreachable(host, port);
+	std::string text = problem[0] ? std::string(problem) : "Seerr did not answer at " + showAddress(host, port);
 	if (text.size() > 120) {
 		text = text.substr(0, 117) + "...";
 	}
@@ -306,6 +306,7 @@ struct Card {
 	long long id{ 0 };
 	std::string type; // "movie" or "tv"
 	std::string title, year, overview, posterPath;
+	std::string character; // a cast card: the role; a card on an actor's page: the role they played
 	int status{ 1 };      // Seerr's media status: 1 unknown (not requested), 2 pending, 3 processing, 4 partly available, 5 available
 	int requestState{ 0 }; // My Requests only: the request's own status (1 awaiting approval, 2 approved, 3 declined)
 	bool asking{ false };
@@ -328,6 +329,15 @@ struct Row {
 	std::string note;     // what to say when it has nothing
 };
 
+// A page left behind while a cast page or an actor page is on show
+struct Level {
+	std::vector<Row> rows;
+	int selRow{ 0 };
+	float rowScroll{ 0.0f };
+	std::vector<int> selCol;
+	std::vector<float> colScroll;
+};
+
 struct Picture {
 	int rowUid{ 0 };
 	long long id{ 0 };
@@ -346,6 +356,7 @@ struct State {
 	std::string notice;
 	std::atomic<int> noticeSerial{ 0 };
 	std::vector<Row> rows;
+	std::vector<Level> stack; // Discover, then a cast page, ... : what Back returns to
 	int nextUid{ 1 };
 	std::vector<std::pair<int, long long>> wanted; // (row uid, card id) the screen is looking at, nearest first
 	std::deque<Picture> pictures;
@@ -456,6 +467,7 @@ inline void rowsReset()
 	State &s = state();
 	std::lock_guard<std::mutex> g(s.m);
 	s.rows.clear();
+	s.stack.clear();
 	auto add = [&](const char *name, const char *path, const char *type, bool mine) {
 		Row r;
 		r.uid = s.nextUid++;
@@ -740,6 +752,15 @@ inline void startRequest(int uid, long long id)
 					}
 				}
 			}
+			for (Level &level : st.stack) {
+				for (Row &row : level.rows) {
+					for (Card &c : row.cards) {
+						if (c.id == id && c.type == type && done && c.status < 2) {
+							c.status = 2;
+						}
+					}
+				}
+			}
 			if (done) {
 				st.notice = note;
 			} else {
@@ -750,6 +771,248 @@ inline void startRequest(int uid, long long id)
 			st.noticeSerial++;
 		}
 		st.busy--;
+	}).detach();
+}
+
+// ---- a title's cast, an actor's films and series ----
+
+// Text cut to at most max bytes (not in the middle of a letter), with ".." after it when it was cut
+inline std::string clipText(const std::string &text, size_t max)
+{
+	if (text.size() <= max) {
+		return text;
+	}
+	size_t n = max;
+	while (n > 0 && (static_cast<unsigned char>(text[n]) & 0xC0) == 0x80) {
+		n--;
+	}
+	return text.substr(0, n) + "..";
+}
+
+// "Self", "Himself" ...: an actor's talk-show appearances are not their work
+inline bool playsThemselves(const std::string &role)
+{
+	const std::string r = lower(role);
+	return r.rfind("self", 0) == 0 || r.rfind("himself", 0) == 0 || r.rfind("herself", 0) == 0 ||
+		r.find("archive footage") != std::string::npos;
+}
+
+struct Credit {
+	Card card;
+	long long votes{ 0 };
+};
+
+// The cards of a credits list (an actor's "cast" or "crew"): the best known first, each title once, with a poster
+inline void creditCards(json_object *list, const char *job, std::vector<Card> *movies, std::vector<Card> *shows, size_t limit = 40)
+{
+	const int n = (list && json_object_is_type(list, json_type_array)) ? static_cast<int>(json_object_array_length(list)) : 0;
+	std::vector<Credit> m, t;
+	for (int i = 0; i < n; i++) {
+		json_object *o = json_object_array_get_idx(list, i);
+		const std::string type = jstr(o, "mediaType");
+		if (type != "movie" && type != "tv") {
+			continue;
+		}
+		if (job && jstr(o, "job") != job) {
+			continue;
+		}
+		Credit k;
+		Card &c = k.card;
+		c.id = jint(o, "id");
+		c.type = type;
+		c.title = type == "movie" ? jstr(o, "title") : jstr(o, "name");
+		const std::string date = type == "movie" ? jstr(o, "releaseDate") : jstr(o, "firstAirDate");
+		c.year = date.size() >= 4 ? date.substr(0, 4) : std::string();
+		c.overview = jstr(o, "overview");
+		c.posterPath = jstr(o, "posterPath");
+		c.character = job ? std::string(job) : jstr(o, "character");
+		if (c.title.empty() || c.id <= 0 || c.posterPath.size() < 2 || (!job && playsThemselves(c.character))) {
+			continue;
+		}
+		if (json_object *info = jget(o, "mediaInfo")) {
+			c.status = std::max(1, static_cast<int>(jint(info, "status")));
+		}
+		k.votes = jint(o, "voteCount");
+		(type == "movie" ? m : t).push_back(k);
+	}
+	auto take = [limit](std::vector<Credit> &from, std::vector<Card> *to) {
+		if (!to) {
+			return;
+		}
+		std::stable_sort(from.begin(), from.end(), [](const Credit &a, const Credit &b) { return a.votes > b.votes; });
+		for (const Credit &k : from) {
+			bool have = false;
+			for (const Card &c : *to) {
+				have = have || c.id == k.card.id;
+			}
+			if (!have && to->size() < limit) {
+				to->push_back(k.card);
+			}
+		}
+	};
+	take(m, movies);
+	take(t, shows);
+}
+
+// A page's row is ready (or failed): what it holds now, if the person is still on that page
+inline void pageReady(int uid, std::vector<Card> cards, const std::string &problem, bool unauthorised)
+{
+	State &s = state();
+	std::lock_guard<std::mutex> g(s.m);
+	for (Row &row : s.rows) {
+		if (row.uid != uid) {
+			continue;
+		}
+		row.loading = 0;
+		if (unauthorised) {
+			s.message = "Sign in to Seerr again";
+			s.needLogin = 1;
+			row.failed = true;
+		} else if (!problem.empty()) {
+			row.failed = true;
+			s.message = problem;
+		} else {
+			row.cards = std::move(cards);
+		}
+		return;
+	}
+}
+
+// The cast of a movie or series: Seerr's page for the title lists it
+inline void startCast(int uid, long long id, const std::string &type)
+{
+	State &s = state();
+	std::string host, cookie;
+	int port;
+	{
+		std::lock_guard<std::mutex> g(s.m);
+		host = s.host;
+		port = s.port;
+		cookie = cookieHeader(s);
+	}
+	std::thread([uid, id, type, host, port, cookie]() {
+		std::vector<Card> found;
+		std::string problem;
+		bool unauthorised = false;
+		Http r;
+		if (!request(host, port, "GET", "/api/v1/" + type + "/" + std::to_string(id), cookie, "", &r)) {
+			problem = unreachable(host, port);
+		} else if (r.status == 401 || r.status == 403) {
+			unauthorised = true;
+		} else if (r.status != 200) {
+			problem = statusText(r.status);
+		} else if (json_object *root = json_tokener_parse(r.body.c_str())) {
+			json_object *list = jget(jget(root, "credits"), "cast");
+			const int n = (list && json_object_is_type(list, json_type_array)) ? static_cast<int>(json_object_array_length(list)) : 0;
+			for (int i = 0; i < n && found.size() < 40; i++) {
+				json_object *o = json_object_array_get_idx(list, i);
+				Card c;
+				c.id = jint(o, "id");
+				c.type = "person";
+				c.title = jstr(o, "name");
+				c.character = jstr(o, "character");
+				c.posterPath = jstr(o, "profilePath");
+				if (!c.title.empty() && c.id > 0) {
+					found.push_back(c);
+				}
+			}
+			json_object_put(root);
+		} else {
+			problem = "Seerr's answer was unreadable";
+		}
+		pageReady(uid, found, problem, unauthorised);
+	}).detach();
+}
+
+// An actor: when and where they were born (a line on the first row), their films, their series, and what they directed
+inline void startPerson(int movieUid, int showUid, long long personId, const std::string &name)
+{
+	State &s = state();
+	std::string host, cookie;
+	int port;
+	{
+		std::lock_guard<std::mutex> g(s.m);
+		host = s.host;
+		port = s.port;
+		cookie = cookieHeader(s);
+	}
+	std::thread([movieUid, showUid, personId, name, host, port, cookie]() {
+		State &st = state();
+		std::string problem, facts;
+		bool unauthorised = false;
+		std::vector<Card> movies, shows, directed;
+		const std::string base = "/api/v1/person/" + std::to_string(personId);
+		Http d;
+		if (request(host, port, "GET", base, cookie, "", &d) && d.status == 200) {
+			if (json_object *p = json_tokener_parse(d.body.c_str())) {
+				const std::string born = jstr(p, "birthday"), died = jstr(p, "deathday");
+				if (born.size() >= 4) {
+					facts = died.size() >= 4 ? born.substr(0, 4) + " - " + died.substr(0, 4) : "born " + born.substr(0, 4);
+				}
+				const std::string place = jstr(p, "placeOfBirth");
+				if (!place.empty()) {
+					facts += (facts.empty() ? "" : ", ") + clipText(place, 40);
+				}
+				json_object_put(p);
+			}
+		}
+		Http r;
+		if (!request(host, port, "GET", base + "/combined_credits", cookie, "", &r)) {
+			problem = unreachable(host, port);
+		} else if (r.status == 401 || r.status == 403) {
+			unauthorised = true;
+		} else if (r.status != 200) {
+			problem = statusText(r.status);
+		} else if (json_object *root = json_tokener_parse(r.body.c_str())) {
+			creditCards(jget(root, "cast"), nullptr, &movies, &shows);
+			std::vector<Card> directedMovies, directedShows;
+			creditCards(jget(root, "crew"), "Director", &directedMovies, &directedShows);
+			directed = directedMovies;
+			directed.insert(directed.end(), directedShows.begin(), directedShows.end());
+			json_object_put(root);
+		} else {
+			problem = "Seerr's answer was unreadable";
+		}
+		std::lock_guard<std::mutex> g(st.m);
+		Row *mv = nullptr, *sh = nullptr;
+		for (Row &row : st.rows) {
+			if (row.uid == movieUid) {
+				mv = &row;
+			}
+			if (row.uid == showUid) {
+				sh = &row;
+			}
+		}
+		if (!mv || !sh) {
+			return; // the person has left the page
+		}
+		mv->loading = 0;
+		sh->loading = 0;
+		if (unauthorised) {
+			st.message = "Sign in to Seerr again";
+			st.needLogin = 1;
+			mv->failed = sh->failed = true;
+			return;
+		}
+		if (!problem.empty()) {
+			st.message = problem;
+			mv->failed = sh->failed = true;
+			return;
+		}
+		mv->cards = movies;
+		sh->cards = shows;
+		if (!facts.empty()) {
+			mv->name += "  \xC2\xB7  " + facts;
+		}
+		if (!directed.empty()) {
+			Row dir;
+			dir.uid = st.nextUid++;
+			dir.name = name + ": Directed";
+			dir.defaultType = "movie";
+			dir.page = dir.pages = 1;
+			dir.cards = directed;
+			st.rows.push_back(dir); // mv and sh are not used after this
+		}
 	}).detach();
 }
 
@@ -941,6 +1204,8 @@ class Screen
 	// The tab was left (or Seerr switched off): the posters go back and the poster worker stops
 	void deactivate()
 	{
+		::jf::castRequest().pending = false;
+		fromLibrary_ = false;
 		if (open_) {
 			closeScreen();
 		}
@@ -971,6 +1236,7 @@ class Screen
 			return;
 		}
 		clock_ += dt;
+		pad_ = pad;
 		State &s = state();
 		takePictures();
 		{
@@ -1031,6 +1297,14 @@ class Screen
 		}
 		if (!pad && !kb_ && !needSignIn_ && !connecting_) {
 			wantPosters(); // the posters load while the tabs have the pad too
+		}
+		if (::jf::castRequest().pending && open_ && !needSignIn_ && !connecting_ && !kb_) {
+			::jf::CastRequest &cr = ::jf::castRequest();
+			cr.pending = false;
+			leaveAll();
+			fromLibrary_ = true;
+			openCast(cr.tmdb, cr.type, cr.title);
+			return;
 		}
 		if (busy_ || !pad) {
 			return;
@@ -1097,6 +1371,9 @@ class Screen
 			return;
 		}
 		drawRows(list, fonts);
+		if (pad_) {
+			drawLegend(list, fonts);
+		}
 	}
 
   private:
@@ -1115,6 +1392,8 @@ class Screen
 	DestroyTexture destroy_;
 	bool open_{ false }, busy_{ false }, kb_{ false }, showText_{ true }, connecting_{ false };
 	bool needSignIn_{ false }, autoAsk_{ false }, wantTabs_{ false };
+	bool fromLibrary_{ false }; // the cast page on show was asked for by a film page: Back leaves the tab
+	bool pad_{ false }; // the page (not the tabs) has the pad: it draws its own button legend
 	Ask ask_{ Ask::search };
 	float clock_{ 0.0f }, noticeClock_{ 0.0f }, evictClock_{ 0.0f };
 	int selRow_{ 0 }, rowCount_{ 0 }, noticeSeen_{ 0 };
@@ -1146,6 +1425,116 @@ class Screen
 		startRow(b);
 	}
 
+	// A cast page or an actor page: the rows on show are put aside (their pictures given back) and these take their place
+	void enterPage(std::vector<Row> rows)
+	{
+		State &s = state();
+		std::lock_guard<std::mutex> g(s.m);
+		giveBack(s.rows);
+		Level l;
+		l.rows = std::move(s.rows);
+		l.selRow = selRow_;
+		l.rowScroll = rowScroll_;
+		l.selCol = selCol_;
+		l.colScroll = colScroll_;
+		s.stack.push_back(std::move(l));
+		s.rows = std::move(rows);
+		s.wanted.clear();
+		selRow_ = 0;
+		rowScroll_ = 0.0f;
+		selCol_.assign(8, 0);
+		colScroll_.assign(8, 0.0f);
+		rowCount_ = static_cast<int>(s.rows.size());
+	}
+
+	// Back from a cast or actor page to the page before it; false when there is none
+	bool leavePage()
+	{
+		State &s = state();
+		std::lock_guard<std::mutex> g(s.m);
+		if (s.stack.empty()) {
+			return false;
+		}
+		giveBack(s.rows);
+		Level l = std::move(s.stack.back());
+		s.stack.pop_back();
+		s.rows = std::move(l.rows);
+		s.wanted.clear();
+		selRow_ = l.selRow;
+		rowScroll_ = l.rowScroll;
+		selCol_ = l.selCol;
+		colScroll_ = l.colScroll;
+		rowCount_ = static_cast<int>(s.rows.size());
+		return true;
+	}
+
+	void leaveAll()
+	{
+		fromLibrary_ = false;
+		while (leavePage()) {
+		}
+	}
+
+	// The pictures of these rows go back to the program; the posters are fetched again (from the cache) if the rows return
+	void giveBack(std::vector<Row> &rows)
+	{
+		for (Row &row : rows) {
+			for (Card &c : row.cards) {
+				if (c.tex && destroy_) {
+					destroy_(c.tex);
+				}
+				c.tex = 0;
+				if (c.texState == 1 || c.texState == 2) {
+					c.texState = 0;
+				}
+			}
+		}
+	}
+
+	void openCast(long long id, const std::string &type, const std::string &title)
+	{
+		State &s = state();
+		Row r;
+		{
+			std::lock_guard<std::mutex> g(s.m);
+			r.uid = s.nextUid++;
+		}
+		r.name = "Cast of " + title;
+		r.defaultType = "person";
+		r.loading = 1;
+		r.page = r.pages = 1; // nothing more to fetch
+		r.note = "No cast is listed";
+		const int uid = r.uid;
+		std::vector<Row> rows;
+		rows.push_back(r);
+		enterPage(std::move(rows));
+		startCast(uid, id, type);
+	}
+
+	void openPerson(long long id, const std::string &name)
+	{
+		State &s = state();
+		std::vector<Row> rows(2);
+		{
+			std::lock_guard<std::mutex> g(s.m);
+			rows[0].uid = s.nextUid++;
+			rows[1].uid = s.nextUid++;
+		}
+		rows[0].name = name + ": Movies";
+		rows[0].defaultType = "movie";
+		rows[0].note = "No films are listed";
+		rows[1].name = name + ": Series";
+		rows[1].defaultType = "tv";
+		rows[1].note = "No series are listed";
+		for (Row &r : rows) {
+			r.loading = 1;
+			r.page = r.pages = 1;
+		}
+		const int a = rows[0].uid, b = rows[1].uid;
+		enterPage(std::move(rows));
+		startPerson(a, b, id, name);
+	}
+
 	// Gives every texture back and stops the poster worker
 	void closeScreen()
 	{
@@ -1167,6 +1556,7 @@ class Screen
 			std::free(p.rgba);
 		}
 		s.pictures.clear();
+		s.stack.clear();
 		open_ = false;
 	}
 
@@ -1472,7 +1862,20 @@ class Screen
 		State &s = state();
 		if (in.is_pressed(hui::Action::back)) {
 			fb.play(hui::audio::Cue::back);
-			wantTabs_ = true;
+			bool atBase = false;
+			if (fromLibrary_) {
+				std::lock_guard<std::mutex> g(s.m);
+				atBase = s.stack.size() <= 1;
+			}
+			if (atBase) { // the cast page a film page asked for: Back goes to the film
+				leaveAll();
+				fromLibrary_ = false;
+				::jf::discoverLeave() = true;
+				return;
+			}
+			if (!leavePage()) { // from a cast or actor page, one page back; from Discover, the tabs
+				wantTabs_ = true;
+			}
 			return;
 		}
 		if (selCol_.size() < static_cast<size_t>(rowCount_)) {
@@ -1495,6 +1898,7 @@ class Screen
 		int cards = 0, uid = 0, pages = 1, page = 0, loading = 0;
 		long long selId = 0;
 		bool canAsk = false;
+		std::string selType, selTitle;
 		{
 			std::lock_guard<std::mutex> g(s.m);
 			if (selRow_ < static_cast<int>(s.rows.size())) {
@@ -1558,7 +1962,9 @@ class Screen
 				want_[0] = c.ar;
 				want_[1] = c.ag;
 				want_[2] = c.ab;
-				canAsk = c.status < 2 && !c.asking && !s.rows[static_cast<size_t>(selRow_)].mine;
+				canAsk = c.status < 2 && !c.asking && !s.rows[static_cast<size_t>(selRow_)].mine && c.type != "person";
+				selType = c.type;
+				selTitle = c.title;
 			}
 			if (evictClock_ > 0.5f) {
 				evictClock_ = 0.0f;
@@ -1591,11 +1997,13 @@ class Screen
 		}
 		if (in.is_pressed(hui::Action::west)) {
 			fb.play(hui::audio::Cue::open);
+			leaveAll(); // a search is a row of Discover
 			openKeyboard(Ask::search, "");
 			return;
 		}
 		if (in.is_pressed(hui::Action::north)) {
 			// disconnect: forget the cookie and ask again
+			leaveAll();
 			writeText("/data/jf-seerr-cookie", "");
 			{
 				std::lock_guard<std::mutex> g(s.m);
@@ -1603,6 +2011,16 @@ class Screen
 			}
 			fb.play(hui::audio::Cue::back);
 			beginConnect();
+			return;
+		}
+		if (in.is_pressed(hui::Action::menu) && cards > 0 && (selType == "movie" || selType == "tv")) {
+			fb.play(hui::audio::Cue::open);
+			openCast(selId, selType, selTitle); // OPTIONS: the cast of the title under the cursor
+			return;
+		}
+		if (in.is_pressed(hui::Action::confirm) && cards > 0 && selType == "person") {
+			fb.play(hui::audio::Cue::open);
+			openPerson(selId, selTitle); // an actor: their films and series
 			return;
 		}
 		if (in.is_pressed(hui::Action::confirm) && cards > 0) {
@@ -1694,7 +2112,18 @@ class Screen
 					hui::ui::text(list, fonts.regular, t.c_str(), box.cx(), box.y + box.h * 0.5f, 20, white.with_alpha(0.6f), Align::center);
 				}
 				list.bordered_rect(box, radius, Color{ 0, 0, 0, 0 }, on ? 2.5f : 1.5f, white.with_alpha(on ? 0.85f : 0.16f * light));
-				if (const char *word = statusWord(c)) {
+				if (c.status >= 5 && !c.asking && c.requestState != 3 && c.type != "person") {
+					// a green tick on the corner: it is in your library
+					const float tx = box.x + 32.0f, ty = box.y + 32.0f;
+					list.circle(tx, ty, 21.0f, ink.with_alpha(0.55f * light));
+					list.circle(tx, ty, 18.0f, Color{ 0.14f, 0.66f, 0.36f, 0.4f + 0.6f * light });
+					for (int k = 0; k <= 5; k++) {
+						list.circle(tx - 8.0f + static_cast<float>(k), ty + 0.5f + 1.1f * static_cast<float>(k), 2.4f, white);
+					}
+					for (int k = 1; k <= 10; k++) {
+						list.circle(tx - 3.0f + 1.1f * static_cast<float>(k), ty + 6.0f - 1.2f * static_cast<float>(k), 2.4f, white);
+					}
+				} else if (const char *word = statusWord(c)) {
 					// a pill on the corner, like the wheel's NEW and WATCHED tags
 					const bool lib = c.status >= 5;
 					const bool declined = c.requestState == 3;
@@ -1720,16 +2149,33 @@ class Screen
 				const Card &c = row.cards[static_cast<size_t>(col)];
 				hui::ui::text(list, fonts.display, fonts.display.font->fit(c.title.c_str(), 60, 1300.0f), 960.0f, 836.0f, 60, white,
 					Align::center);
-				std::string facts = c.type == "tv" ? "Series" : "Movie";
+				const bool person = c.type == "person";
+				std::string facts = person ? "Cast" : c.type == "tv" ? "Series" : "Movie";
 				if (!c.year.empty()) {
 					facts += "  \xC2\xB7  " + c.year;
 				}
-				if (const char *word = statusWord(c)) {
-					facts += std::string("  \xC2\xB7  ") + word;
-				} else if (!row.mine) {
-					facts += "  \xC2\xB7  Press Cross to request";
+				std::string role;
+				if (!c.character.empty()) {
+					role = "as " + c.character;
 				}
-				hui::ui::text(list, fonts.regular, facts.c_str(), 960.0f, 884.0f, 26, white.with_alpha(0.74f), Align::center);
+				if (person) {
+					facts += "  \xC2\xB7  Select to see their TV/Film credits";
+				} else {
+					if (const char *word = statusWord(c)) {
+						facts += std::string("  \xC2\xB7  ") + word;
+					} else if (!row.mine) {
+						facts += "  \xC2\xB7  Press Cross to request";
+					}
+					facts += "  \xC2\xB7  Options: cast";
+				}
+				if (role.empty()) {
+					hui::ui::text(list, fonts.regular, facts.c_str(), 960.0f, 884.0f, 26, white.with_alpha(0.74f), Align::center);
+				} else {
+					// the role on a line of its own, larger and brighter than the facts under it
+					hui::ui::text(list, fonts.semibold, fonts.semibold.font->fit(role.c_str(), 34, 1500.0f), 960.0f, 880.0f, 34,
+						white.with_alpha(0.92f), Align::center);
+					hui::ui::text(list, fonts.regular, facts.c_str(), 960.0f, 914.0f, 24, white.with_alpha(0.74f), Align::center);
+				}
 				const std::string &o = c.overview;
 				const size_t cut = 118;
 				size_t at = o.size() > cut ? o.rfind(' ', cut) : o.size();
@@ -1741,10 +2187,52 @@ class Screen
 				if (second.size() > cut) {
 					second = second.substr(0, cut - 3) + "...";
 				}
-				hui::ui::text(list, fonts.regular, first.c_str(), 960.0f, 930.0f, 22, white.with_alpha(0.55f), Align::center);
-				hui::ui::text(list, fonts.regular, second.c_str(), 960.0f, 962.0f, 22, white.with_alpha(0.55f), Align::center);
+				const bool roleLine = !c.character.empty();
+				hui::ui::text(list, fonts.regular, first.c_str(), 960.0f, roleLine ? 952.0f : 930.0f, 22, white.with_alpha(0.55f),
+					Align::center);
+				if (!roleLine) {
+					hui::ui::text(list, fonts.regular, second.c_str(), 960.0f, 962.0f, 22, white.with_alpha(0.55f), Align::center);
+				}
 			}
 		}
+	}
+
+	// The button legend along the bottom: it follows what is under the cursor (an actor is Selected, a title is Requested)
+	void drawLegend(hui::gfx::DrawList &list, const hui::ui::Fonts &fonts) const
+	{
+		State &s = state();
+		std::string type;
+		bool canRequest = false, inPage = false;
+		{
+			std::lock_guard<std::mutex> g(s.m);
+			inPage = !s.stack.empty();
+			if (selRow_ >= 0 && selRow_ < static_cast<int>(s.rows.size()) && selRow_ < static_cast<int>(selCol_.size())) {
+				const Row &row = s.rows[static_cast<size_t>(selRow_)];
+				const int col = selCol_[static_cast<size_t>(selRow_)];
+				if (col >= 0 && col < static_cast<int>(row.cards.size())) {
+					const Card &c = row.cards[static_cast<size_t>(col)];
+					type = c.type;
+					canRequest = !row.mine && !statusWord(c);
+				}
+			}
+		}
+		hui::ui::Hint hints[6];
+		int n = 0;
+		hints[n++] = { hui::ui::Button::dpad, "Choose" };
+		if (type == "person") {
+			hints[n++] = { hui::ui::Button::cross, "Select" };
+		} else if (canRequest) {
+			hints[n++] = { hui::ui::Button::cross, "Request" };
+		}
+		if (type == "movie" || type == "tv") {
+			hints[n++] = { hui::ui::Button::options, "Cast" };
+		}
+		if (!inPage) {
+			hints[n++] = { hui::ui::Button::square, "Search" };
+			hints[n++] = { hui::ui::Button::triangle, "Disconnect" };
+		}
+		hints[n++] = { hui::ui::Button::circle, inPage ? "Back" : "Tabs" };
+		hui::ui::draw_hints(list, fonts, hui::ui::GlyphStyle::dark(), hints, n, 1824, true);
 	}
 
 	void drawKeyboard(hui::gfx::DrawList &list, const hui::ui::Fonts &fonts) const
@@ -1783,8 +2271,10 @@ class Screen
 					Color{ 1, 1, 1, on ? 1.0f : 0.85f }, Align::center);
 			}
 		}
-		hui::ui::text(list, fonts.regular, "Cross type   Square delete   Triangle space   L1 symbols   R1 capitals   Circle back",
-			960.0f, 1000.0f, 24, Color{ 1, 1, 1, 0.5f }, Align::center);
+		const hui::ui::Hint hints[] = { { hui::ui::Button::cross, "Type" }, { hui::ui::Button::square, "Delete" },
+			{ hui::ui::Button::triangle, "Space" }, { hui::ui::Button::l1, "Symbols" }, { hui::ui::Button::r1, "Capitals" },
+			{ hui::ui::Button::circle, "Back" } };
+		hui::ui::draw_hints(list, fonts, hui::ui::GlyphStyle::dark(), hints, 6, 1824, true);
 	}
 };
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Episode list: the highlight bar moves; the rows stay put until the choice reaches the edge.
+- Seasons open to an episode list with watched ticks and summaries; Cross plays. Discover sign-in keyboard shows button pictures.
+- Categories: no brightness pop when changing category; Left from Discover continues round to the last category.
+- Categories: no brightness flash when changing category; Left from the first category goes to Discover.
+- Film page: file size, studio, and an Options button for the cast (needs Seerr); Back returns to the film.
+- Pictures load faster over https: a new connection reuses the earlier TLS session instead of repeating the whole handshake, and small writes go out at once.
+
+- Discover: the button legend now follows the cursor (Options for cast, Select on an actor); larger role text on cast pages.
+- Discover: press Options on a movie or series to see its cast; pick an actor for their films and series (with Request), and what they directed. Back steps up a page.
+- Discover: a green tick on titles that are in your library.
+- Fixed: the app could crash when Seerr did not answer.
+
 ## 1.0.0-beta.3 (2026-10-13)
 
 - Added: https and domain names. Enter `https://your.domain` on the setup screen to connect through a reverse proxy

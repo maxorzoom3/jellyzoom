@@ -58,6 +58,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -443,10 +444,23 @@ class Shelf
         return list_;
     }
 
+    // Coming in from another category: the backdrop starts from the colours the old wheel was showing and glides to
+    // this wheel's own, instead of jumping to whatever this wheel last had (that jump was a flash of brightness)
+    void take_palette_from(const Shelf &old)
+    {
+        if (count_ <= 0 || old.count_ <= 0)
+            return;
+        for (int i = 0; i < 5; ++i)
+            palette_[i].snap(old.palette_[i].value());
+        apply_palette(false);
+    }
+
     void enter()
     {
         sync_epoch();
         age_ = 0.0f;
+        cue_t_ = -1.0f; // no hop or ring left over from the last visit
+        cue_y_ = cue_flash_ = 0.0f;
         open_ = false;
         launch_.running = false;
         if (count_ > 0)
@@ -480,6 +494,8 @@ class Shelf
         letter_flash_ = std::max(0.0f, letter_flash_ - dt / 1.1f);
         if (open_)
             update_details(input, dt, feedback);
+        else if (episode_mode())
+            update_episodes(input, dt, feedback);
         else
             update_wheel(input, feedback);
         spin(dt, feedback);
@@ -534,13 +550,19 @@ class Shelf
         gfx::DrawList &list = frame.scene;
         const float lift = primary ? tween::clamp01(lift_.value) : 0.0f;
         // While the tabs have the focus the wheel steps back a little; it comes forward with a hop
-        list.push_opacity(fade * (1.0f - 0.24f * (primary ? tween::clamp01(tabs_amount_) : 0.0f)));
-        draw_row(list, lift);
-        draw_caption(list, lift);
-        draw_scrub_bar(list, lift);
-        draw_letter(list);
-        if (primary)
-            draw_corner_qr(list, lift);
+        // (the wheel that is sliding out is dimmed just as much, or it would pop brighter for a moment as the slide begins)
+        list.push_opacity(fade * (1.0f - 0.24f * tween::clamp01(tabs_amount_)));
+        if (episode_mode())
+            draw_episodes(list, lift);
+        else
+        {
+            draw_row(list, lift);
+            draw_caption(list, lift);
+            draw_scrub_bar(list, lift);
+            draw_letter(list);
+            if (primary)
+                draw_corner_qr(list, lift);
+        }
         list.pop_opacity();
         if (primary && lift > 0.01f)
         {
@@ -590,6 +612,10 @@ class Shelf
         wheel_.snap(static_cast<float>(target_));
         calm_.snap(1.0f);
         apply_palette(true);
+        ep_placed_ = false;
+        ep_wait_ = 0.0f;
+        ep_top_ = 0;
+        ep_top_f_ = 0.0f;
     }
 
     const ::jf::Item &item(int index) const
@@ -685,6 +711,125 @@ class Shelf
     }
 
     // ---- input ----
+
+    // ---- an episode list: a season's episodes stand in a list with a summary, not on a wheel ----
+    // The children of a season (browse list, kind 6) whose first titles are episodes
+    bool episode_mode() const
+    {
+        if (count_ <= 0 || list_.kind != 6)
+            return false;
+        const int look = std::min(count_, 6);
+        for (int i = 0; i < look; ++i)
+            if (item(i).ready)
+                return item(i).kindRaw == "Episode";
+        return false;
+    }
+
+    // The play request for the episode under the cursor: where it left off, with the server's own audio and subtitles
+    void play_episode(app::Feedback &feedback)
+    {
+        const ::jf::Item &it = item(current());
+        if (!it.ready || !it.playable)
+        {
+            feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+            return;
+        }
+        ::jf::PlayOptions options;
+        JfGateDetails d;
+        std::memset(&d, 0, sizeof(d));
+        if (::jf_gate_details_get(it.gateIndex, &d) == 1)
+        {
+            options.audio = d.default_audio;
+            options.subtitle = d.default_subtitle;
+        }
+        feedback.play(audio::Cue::launch);
+        ::jf::requestPlay(it.gateIndex, options);
+        feedback.rumble(0.7f, 0.18f);
+        launch_.start(0.9f);
+    }
+
+    void update_episodes(const InputFrame &input, float dt, app::Feedback &feedback)
+    {
+        const int here = current();
+        // The list stands still; only when the choice leaves the seven rows on show does it scroll, by the least it can
+        constexpr int kRows = 7;
+        if (here < ep_top_)
+            ep_top_ = here;
+        else if (here > ep_top_ + kRows - 1)
+            ep_top_ = here - kRows + 1;
+        ep_top_ = std::clamp(ep_top_, 0, std::max(0, count_ - kRows));
+        if (!ep_placed_)
+            ep_top_f_ = static_cast<float>(ep_top_);
+        else
+            ep_top_f_ += (static_cast<float>(ep_top_) - ep_top_f_) * std::min(1.0f, dt * 14.0f);
+        // On arrival the list walks past the episodes that were watched and rests on the first one that was not
+        if (!ep_placed_)
+        {
+            ep_wait_ += dt;
+            const ::jf::Item &it = item(here);
+            if (input.nav != Direction::none || input.is_pressed(Action::confirm) || ep_wait_ > 4.0f)
+                ep_placed_ = true;
+            else if (it.ready)
+            {
+                if (it.watched && here + 1 < count_)
+                {
+                    wheel_.snap(static_cast<float>(here + 1));
+                    settle_on(here + 1);
+                    centre_ = here + 1;
+                }
+                else
+                {
+                    if (it.watched) // all watched: start at the top
+                    {
+                        wheel_.snap(0.0f);
+                        settle_on(0);
+                        centre_ = 0;
+                    }
+                    ep_placed_ = true;
+                }
+                return;
+            }
+            else
+                return;
+        }
+        int to = here;
+        if (input.nav == Direction::down)
+            to = std::min(count_ - 1, here + 1);
+        else if (input.nav == Direction::up)
+            to = std::max(0, here - 1);
+        if (input.is_pressed(Action::page_next))
+            to = std::min(count_ - 1, here + 5);
+        else if (input.is_pressed(Action::page_prev))
+            to = std::max(0, here - 5);
+        if (to != here)
+        {
+            settle_on(to);
+            ::jf_gate_details_request(item(to).gateIndex); // so Play knows the usual audio and subtitles
+            feedback.play(audio::Cue::focus, 1.0f, 0.0f);
+        }
+        else if ((input.nav == Direction::up || input.nav == Direction::down) && !input.nav_repeat)
+            feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+        if (input.is_pressed(Action::north))
+            toggle_favorite(feedback);
+        if (input.is_pressed(Action::menu))
+        {
+            // OPTIONS: this episode's own page (audio, subtitles, who is in it)
+            if (!item(here).ready)
+            {
+                feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+                return;
+            }
+            opened_ = here;
+            settle_on(opened_);
+            quiet_ = true;
+            open_ = true;
+            begin_details();
+            feedback.play(audio::Cue::open);
+            return;
+        }
+        if (input.is_pressed(Action::confirm))
+            play_episode(feedback);
+    }
 
     void update_wheel(const InputFrame &input, app::Feedback &feedback)
     {
@@ -971,6 +1116,8 @@ class Shelf
         scroll_target_ = std::clamp(scroll_target_ + move, 0.0f, std::max(0.0f, summary_max_));
         if (input.is_pressed(Action::north))
             toggle_favorite(feedback);
+        if (input.is_pressed(Action::menu))
+            request_cast(feedback);
         if (input.is_pressed(Action::back))
         {
             feedback.play(audio::Cue::back);
@@ -981,6 +1128,29 @@ class Shelf
             move_focus(input.nav, feedback);
         if (input.is_pressed(Action::confirm))
             activate(feedback);
+    }
+
+    // Cast and info from Seerr (Discover) for the title that is open: needs its TMDB number and Seerr switched on
+    bool cast_available() const
+    {
+        if (!open_ || det_state_ != 1 || !det_.tmdb[0] || !::jf::discoverEnabled())
+            return false;
+        return !std::strcmp(det_.kind, "Movie") || !std::strcmp(det_.kind, "Series");
+    }
+
+    void request_cast(app::Feedback &feedback)
+    {
+        if (!cast_available())
+        {
+            feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+            return;
+        }
+        ::jf::CastRequest &r = ::jf::castRequest();
+        r.tmdb = std::atoll(det_.tmdb);
+        std::snprintf(r.type, sizeof(r.type), "%s", !std::strcmp(det_.kind, "Series") ? "tv" : "movie");
+        std::snprintf(r.title, sizeof(r.title), "%s", item(opened_).title);
+        r.pending = r.tmdb > 0;
+        feedback.play(r.pending ? audio::Cue::open : audio::Cue::error);
     }
 
     void move_focus(Direction direction, app::Feedback &feedback)
@@ -1554,6 +1724,145 @@ class Shelf
                  gfx::mix(kInk, tint, light));
     }
 
+    // A green tick: the episode was watched
+    static void draw_check(gfx::DrawList &list, float cx, float cy, float r, float alpha)
+    {
+        list.circle(cx, cy, r, Color{0.14f, 0.66f, 0.36f, alpha});
+        const float u = r / 20.0f;
+        for (int k = 0; k <= 4; ++k)
+            list.circle(cx - 8.0f * u + 2.0f * u * static_cast<float>(k), cy + 1.0f * u + 2.0f * u * static_cast<float>(k), 2.2f * u,
+                        kWhite.with_alpha(alpha));
+        for (int k = 1; k <= 9; ++k)
+            list.circle(cx - 2.0f * u + 1.2f * u * static_cast<float>(k), cy + 7.0f * u - 1.3f * u * static_cast<float>(k), 2.2f * u,
+                        kWhite.with_alpha(alpha));
+    }
+
+    // The list on the left (the chosen episode stays at the middle and the list moves), the chosen episode on the right
+    void draw_episodes(gfx::DrawList &list, float lift) const
+    {
+        const ui::Fonts &fonts = context_.fonts;
+        const float fade = 1.0f - 0.7f * lift;
+        const float tabs = tween::clamp01(tabs_amount_);
+        const int sel = current();
+        const float v = std::clamp(wheel_.value, 0.0f, last());
+        const float row_h = 92.0f;
+        const float lx = 96.0f, lw = 800.0f;
+        char text[96];
+
+        std::snprintf(text, sizeof(text), "%d episode%s", count_, count_ == 1 ? "" : "s");
+        ui::text(list, fonts.display, fonts.display.font->fit(list_.name.empty() ? "Episodes" : list_.name.c_str(), 46, lw), lx, 168.0f, 46,
+                 kWhite.with_alpha(fade));
+        ui::text(list, fonts.regular, text, lx, 206.0f, 22, kWhite.with_alpha(0.55f * fade));
+
+        // The rows stand still (they only scroll when the choice runs off the end); the bar is what moves
+        const float list_top = 250.0f;
+        list.push_clip(Rect{0.0f, 236.0f, 930.0f, row_h * 7.0f + 20.0f});
+        for (int i = std::max(0, static_cast<int>(std::floor(ep_top_f_)) - 1);
+             i <= std::min(count_ - 1, static_cast<int>(std::ceil(ep_top_f_)) + 7); ++i)
+        {
+            const float a = fade;
+            const ::jf::Item &it = item(i);
+            const Rect row{lx, list_top + (static_cast<float>(i) - ep_top_f_) * row_h + 4.0f, lw, row_h - 8.0f};
+            list.rounded_rect(row, 24.0f, kWhite.with_alpha(0.05f * a));
+            // the tick: green when watched, a ring when not, gold when it was left part-way
+            const float tx = row.x + 44.0f, ty = row.cy();
+            if (it.ready && it.watched)
+                draw_check(list, tx, ty, 20.0f, a);
+            else
+            {
+                list.circle(tx, ty, 20.0f, kWhite.with_alpha(0.22f * a));
+                list.circle(tx, ty, 17.0f, Color{0.05f, 0.06f, 0.1f, 0.9f * a});
+                if (it.ready && it.progress > 0.01f)
+                    list.circle(tx, ty, 8.0f, kGold.with_alpha(a));
+            }
+            std::snprintf(text, sizeof(text), "%d", i + 1);
+            ui::text(list, fonts.semibold, text, row.x + 88.0f, ty + 9.0f, 26, kWhite.with_alpha(0.5f * a));
+            if (!it.ready)
+            {
+                list.rounded_rect(Rect{row.x + 150.0f, ty - 9.0f, 360.0f, 18.0f}, 9.0f, kWhite.with_alpha(0.08f * a));
+                continue;
+            }
+            const std::string title(fonts.semibold.font->fit(it.title, 28, lw - 150.0f - (it.runtime[0] ? 150.0f : 40.0f)));
+            ui::text(list, fonts.semibold, title.c_str(), row.x + 140.0f, ty + 10.0f, 28, kWhite.with_alpha(a));
+            if (it.runtime[0])
+                ui::text(list, fonts.regular, it.runtime, row.x + row.w - 28.0f, ty + 8.0f, 22, kWhite.with_alpha(0.6f * a),
+                         gfx::Align::right);
+            if (it.progress > 0.01f && !it.watched)
+            {
+                const Rect bar{row.x + 140.0f, row.y + row.h - 14.0f, row.w - 140.0f - 28.0f, 4.0f};
+                list.rounded_rect(bar, 2.0f, kWhite.with_alpha(0.16f * a));
+                list.rounded_rect({bar.x, bar.y, std::max(4.0f, bar.w * it.progress), 4.0f}, 2.0f, kGold.with_alpha(a));
+            }
+        }
+        // the choosing bar, on top, gliding to the row that is chosen
+        {
+            const Rect bar{lx, list_top + (v - ep_top_f_) * row_h + 4.0f, lw, row_h - 8.0f};
+            list.rounded_rect(bar, 24.0f, kWhite.with_alpha(0.13f * fade));
+            list.bordered_rect(bar, 24.0f, kClear, 2.0f, kWhite.with_alpha(0.85f * fade * (1.0f - 0.85f * tabs)));
+        }
+        list.pop_clip();
+
+        // the chosen episode
+        const ::jf::Item &it = item(sel);
+        const float px = 980.0f, pw = 844.0f;
+        const float thumb_h = std::min(pw * (it.aspect > 0.2f ? it.aspect : 0.5625f), 440.0f);
+        const float thumb_w = thumb_h / (it.aspect > 0.2f ? it.aspect : 0.5625f);
+        const Rect thumb{px, 170.0f, std::min(thumb_w, pw), thumb_h};
+        list.shadow({thumb.x, thumb.y + 14.0f, thumb.w, thumb.h}, 22.0f, 40.0f, kBlack.with_alpha(0.5f * fade));
+        list.push_opacity(fade);
+        list.image(it.cover, thumb, gfx::kFullUv, {1.0f, 1.0f, 1.0f, 1.0f}, 22.0f);
+        list.bordered_rect(thumb, 22.0f, kClear, 1.5f, kWhite.with_alpha(0.2f));
+        if (it.ready && it.watched)
+            draw_check(list, thumb.x + 44.0f, thumb.y + 44.0f, 24.0f, 1.0f);
+        if (it.ready && it.progress > 0.01f && !it.watched)
+        {
+            const Rect bar{thumb.x + 24.0f, thumb.y + thumb.h - 24.0f, thumb.w - 48.0f, 6.0f};
+            list.rounded_rect(bar, 3.0f, kBlack.with_alpha(0.5f));
+            list.rounded_rect({bar.x, bar.y, std::max(6.0f, bar.w * it.progress), 6.0f}, 3.0f, kGold);
+        }
+        float y = thumb.y + thumb.h + 62.0f;
+        if (!it.ready)
+        {
+            list.rounded_rect(Rect{px, y - 30.0f, 420.0f, 30.0f}, 15.0f, kWhite.with_alpha(0.08f));
+            list.pop_opacity();
+            return;
+        }
+        ui::text(list, fonts.display, fonts.display.font->fit(it.title, 46, pw), px, y, 46, kWhite);
+        y += 44.0f;
+        std::string meta = "Episode " + std::to_string(sel + 1);
+        if (it.runtime[0])
+            meta += std::string("  \xC2\xB7  ") + it.runtime;
+        if (it.year > 0)
+            meta += "  \xC2\xB7  " + std::to_string(it.year);
+        ui::text(list, fonts.regular, meta.c_str(), px, y, 24, kWhite.with_alpha(0.7f));
+        // watched or not
+        float sx = px + fonts.regular.measure(meta.c_str(), 24) + 28.0f;
+        if (it.watched)
+        {
+            draw_check(list, sx + 14.0f, y - 8.0f, 14.0f, 1.0f);
+            ui::text(list, fonts.semibold, "Watched", sx + 38.0f, y, 22, Color{0.5f, 0.9f, 0.62f, 1.0f});
+        }
+        else if (it.progress > 0.01f)
+            ui::text(list, fonts.semibold, ("Left at " + clock_text(it.resumeSeconds)).c_str(), sx, y, 22, kGold);
+        else
+            ui::text(list, fonts.semibold, "Not watched", sx, y, 22, kWhite.with_alpha(0.5f));
+        y += 46.0f;
+        if (ep_wrap_gate_ != it.gateIndex)
+        {
+            ep_wrap_ = wrap_lines(fonts.regular, it.blurb, 26.0f, pw);
+            ep_wrap_gate_ = it.gateIndex;
+        }
+        const int max_lines = static_cast<int>((990.0f - y) / 36.0f);
+        for (int k = 0; k < static_cast<int>(ep_wrap_.size()) && k < max_lines; ++k)
+        {
+            std::string line = ep_wrap_[static_cast<std::size_t>(k)];
+            if (k == max_lines - 1 && static_cast<int>(ep_wrap_.size()) > max_lines)
+                line += " ...";
+            ui::text(list, fonts.regular, line.c_str(), px, y + 36.0f * static_cast<float>(k), 26, kWhite.with_alpha(0.86f));
+        }
+        list.pop_opacity();
+    }
+
     void draw_row(gfx::DrawList &list, float lift) const
     {
         // Far covers first, so nearer ones overlap them.
@@ -1995,6 +2304,8 @@ class Shelf
                     full = std::string(det_.tagline) + "\n\n" + full;
                 if (det_.directors[0])
                     full += std::string("\n\nDirected by ") + det_.directors;
+                if (det_.studio[0])
+                    full += std::string("\n\nStudio: ") + det_.studio;
                 if (det_.cast[0])
                     full += std::string("\n\nWith ") + det_.cast;
             }
@@ -2027,7 +2338,8 @@ class Shelf
         // Four facts, arriving one after the other once the panel is there.
         constexpr float kTileGap = 16.0f;
         const float tile_w = (width - 3.0f * kTileGap) / 4.0f;
-        const char *labels[] = {"TYPE", "LENGTH", "RATING", "WATCHED"};
+        const bool show_size = have && it.playable && det_.file_size > 0;
+        const char *labels[] = {"TYPE", show_size ? "FILE SIZE" : "LENGTH", "RATING", "WATCHED"};
         for (int i = 0; i < 4; ++i)
         {
             const float appear = tween::stagger(appear_panel, i, 0.1f, 0.6f);
@@ -2043,7 +2355,16 @@ class Shelf
                 std::snprintf(text, sizeof(text), "%s", it.genre);
                 break;
             case 1:
-                std::snprintf(text, sizeof(text), "%s", it.runtime[0] ? it.runtime : "-");
+                if (show_size)
+                {
+                    const double bytes = static_cast<double>(det_.file_size);
+                    if (bytes >= 1.0e9)
+                        std::snprintf(text, sizeof(text), "%.1f GB", bytes / 1.0e9);
+                    else
+                        std::snprintf(text, sizeof(text), "%d MB", static_cast<int>(bytes / 1.0e6 + 0.5));
+                }
+                else
+                    std::snprintf(text, sizeof(text), "%s", it.runtime[0] ? it.runtime : "-");
                 break;
             case 2:
                 if (it.rating > 0.0f)
@@ -2094,6 +2415,12 @@ class Shelf
             ui::text(list, fonts.semibold, text, rx + 36, ry + 9, 26, kWhite);
             const float w = fonts.semibold.measure(text, 26);
             ui::text(list, fonts.regular, "Viewers", rx + 36 + w + 10, ry + 8, 20, kWhite.with_alpha(0.55f));
+            rx += 36 + w + 10 + fonts.regular.measure("Viewers", 20) + 36;
+        }
+        if (have && det_.studio[0] && x + width - rx > 160.0f)
+        {
+            const std::string studio(fonts.regular.font->fit((std::string("Studio  ") + det_.studio).c_str(), 22, x + width - rx - 4.0f));
+            ui::text(list, fonts.regular, studio.c_str(), rx, ry + 8, 22, kWhite.with_alpha(0.7f));
         }
         list.pop_opacity();
 
@@ -2182,8 +2509,15 @@ class Shelf
                 const ui::Hint hints[] = {{ui::Button::dpad, "Choose  /  Scroll"},
                                           {ui::Button::cross, focus_ <= 1 && item(opened_).playable ? "Play" : "Open"},
                                           {ui::Button::triangle, "Favorite"},
+                                          {ui::Button::options, "Cast"},
                                           {ui::Button::circle, "Back"}};
-                ui::draw_hints(list, fonts, style, hints, 4, 1824, true);
+                if (cast_available())
+                    ui::draw_hints(list, fonts, style, hints, 5, 1824, true);
+                else
+                {
+                    const ui::Hint plain[] = {hints[0], hints[1], hints[2], hints[4]};
+                    ui::draw_hints(list, fonts, style, plain, 4, 1824, true);
+                }
             }
             list.pop_opacity();
         }
@@ -2196,6 +2530,17 @@ class Shelf
             list.push_opacity(tween::stagger(age_, 9, 0.08f, 0.5f) * (1.0f - lift));
             ui::draw_hints(list, fonts, style, hints, static_cast<int>(std::size(hints)), 1824, true);
             draw_touch_fallback(list, tween::stagger(age_, 9, 0.08f, 0.5f) * (1.0f - lift));
+            list.pop_opacity();
+        }
+        else if (episode_mode())
+        {
+            const ui::Hint hints[] = {{ui::Button::dpad, "Choose"},
+                                      {ui::Button::cross, item(current()).resumeSeconds > 1.0f ? "Resume" : "Play"},
+                                      {ui::Button::options, "Details"},
+                                      {ui::Button::triangle, "Favorite"},
+                                      {ui::Button::circle, "Back"}};
+            list.push_opacity(tween::stagger(age_, 9, 0.08f, 0.5f) * (1.0f - lift));
+            ui::draw_hints(list, fonts, style, hints, static_cast<int>(std::size(hints)), 1824, true);
             list.pop_opacity();
         }
         else
@@ -2273,6 +2618,12 @@ class Shelf
     mutable float summary_view_h_ = 236.0f;
     mutable float summary_max_ = 0.0f;
     mutable std::vector<std::string> wrap_lines_;
+    mutable std::vector<std::string> ep_wrap_; // the chosen episode's summary, wrapped
+    mutable int ep_wrap_gate_ = -1;
+    bool ep_placed_ = false; // the episode list has found where you were up to
+    int ep_top_ = 0;         // the first of the seven rows on show
+    mutable float ep_top_f_ = 0.0f; // ... as it scrolls
+    float ep_wait_ = 0.0f;
     mutable int wrap_gate_ = -1;
     mutable int read_gate_ = -1;
     mutable bool read_have_ = false;
@@ -2982,6 +3333,18 @@ class CoverFlow final : public app::Concept
                 ::jf::discoverGo() = 0;
         }
 
+        if (::jf::castRequest().pending && !disc_)
+        {
+            // a film page asked for its cast: the Discover tab opens on it (Back returns here, the page is still open)
+            if (::jf::discoverEnabled())
+            {
+                set_disc(true);
+                tabs_focus_ = false;
+                profile_focus_ = false;
+            }
+            else
+                ::jf::castRequest().pending = false;
+        }
         if (::jf::browseRequest() >= 0)
         {
             // a series, season or collection was opened: its children are on the browse wheel
@@ -3101,6 +3464,8 @@ class CoverFlow final : public app::Concept
         if (!disc_)
             active.draw_base(frame); // the Discover page sets its own backdrop
         if (sliding && !disc_)
+            shelves_[static_cast<std::size_t>(leaving_)]->set_chrome(tabs_focus_, tabs_amount_.value, overlay_ != Overlay::none);
+        if (sliding && !disc_)
             shelves_[static_cast<std::size_t>(leaving_)]->draw_front(frame, false, 0.0f, 1.0f - e, -dir_ * kSlide * e);
         if (!disc_)
             active.draw_front(frame, true, 0.0f, sliding ? e : 1.0f, sliding ? dir_ * kSlide * (1.0f - e) : 0.0f);
@@ -3110,19 +3475,11 @@ class CoverFlow final : public app::Concept
             if (h.draw)
                 h.draw(h.ctx, &frame, &context_.fonts);
             const ui::GlyphStyle style = ui::GlyphStyle::dark();
+            // the Discover page draws its own legend when it has the pad
             if (tabs_focus_)
             {
                 const ui::Hint hints[] = {{ui::Button::dpad, "Library"}, {ui::Button::cross, "Open Discover"}};
                 ui::draw_hints(frame.scene, context_.fonts, style, hints, 2, 1824, true);
-            }
-            else
-            {
-                const ui::Hint hints[] = {{ui::Button::dpad, "Choose"},
-                                          {ui::Button::cross, "Request"},
-                                          {ui::Button::square, "Search"},
-                                          {ui::Button::triangle, "Disconnect"},
-                                          {ui::Button::circle, "Tabs"}};
-                ui::draw_hints(frame.scene, context_.fonts, style, hints, 5, 1824, true);
             }
         }
         draw_tabs(frame.scene);
@@ -3222,6 +3579,7 @@ class CoverFlow final : public app::Concept
         if (index < 0 || index >= n || index == active_)
             return false;
         set_disc(false);
+        const int from = active_;
         leaving_ = active_;
         dir_ = index > active_ ? 1.0f : -1.0f;
         active_ = index;
@@ -3229,6 +3587,7 @@ class CoverFlow final : public app::Concept
         if (reduced())
             leaving_ = -1;
         shelves_[static_cast<std::size_t>(active_)]->enter();
+        shelves_[static_cast<std::size_t>(active_)]->take_palette_from(*shelves_[static_cast<std::size_t>(from)]);
         feedback.play(audio::Cue::tab, 1.0f + 0.05f * dir_, 0.4f * dir_);
         return true;
     }
@@ -3313,7 +3672,21 @@ class CoverFlow final : public app::Concept
             bool moved = false;
             if (disc_ && direction < 0)
             {
-                set_disc(false); // back to the last wheel, which is still the active one
+                // Discover sits after the last category: Left goes on to the last one, so the round keeps going
+                const int last_tab = tab_count() - 1;
+                set_disc(false);
+                if (last_tab >= 0 && active_ != last_tab && !is_browse())
+                {
+                    select(last_tab, feedback);
+                    leaving_ = -1; // the wheel we leave was not on show (Discover was): nothing slides out
+                }
+                else
+                    feedback.play(audio::Cue::tab, 0.95f, -0.4f);
+                return;
+            }
+            if (direction < 0 && !disc_ && active_ == 0 && !is_browse() && ::jf::discoverEnabled())
+            {
+                set_disc(true); // left of the first category wraps round to Discover
                 feedback.play(audio::Cue::tab, 0.95f, -0.4f);
                 return;
             }

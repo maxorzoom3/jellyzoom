@@ -112,6 +112,7 @@ typedef struct {
 	float community;    /* out of 10, else 0 */
 	char tagline[200];
 	char directors[96];
+	char studio[96];    /* the first two studios, comma separated */
 	char cast[280];
 	int width, height;
 	char video_codec[16];
