@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.0.0-beta.4 (2026-10-14)
+
 - Episode list: the highlight bar moves; the rows stay put until the choice reaches the edge.
 - Seasons open to an episode list with watched ticks and summaries; Cross plays. Discover sign-in keyboard shows button pictures.
 - Categories: no brightness pop when changing category; Left from Discover continues round to the last category.
