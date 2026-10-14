@@ -4,17 +4,15 @@
 
 ## 1.0.0-beta.4 (2026-10-14)
 
-- Episode list: the highlight bar moves; the rows stay put until the choice reaches the edge.
-- Seasons open to an episode list with watched ticks and summaries; Cross plays. Discover sign-in keyboard shows button pictures.
-- Categories: no brightness pop when changing category; Left from Discover continues round to the last category.
-- Categories: no brightness flash when changing category; Left from the first category goes to Discover.
+- Discover: Options on a movie or series shows its cast; pick an actor for their films and series (with Request) and what
+  they directed. Back steps up a page. Titles already in your library get a green tick.
+- Discover: the button legend follows the cursor (Options for cast, Select on an actor); the sign-in keyboard shows
+  button pictures; larger role text on cast pages.
 - Film page: file size, studio, and an Options button for the cast (needs Seerr); Back returns to the film.
-- Pictures load faster over https: a new connection reuses the earlier TLS session instead of repeating the whole handshake, and small writes go out at once.
-
-- Discover: the button legend now follows the cursor (Options for cast, Select on an actor); larger role text on cast pages.
-- Discover: press Options on a movie or series to see its cast; pick an actor for their films and series (with Request), and what they directed. Back steps up a page.
-- Discover: a green tick on titles that are in your library.
-- Fixed: the app could crash when Seerr did not answer.
+- Seasons open to an episode list with watched ticks and summaries; Cross plays from where you left off.
+- Left from the first category goes to Discover, and Left from Discover carries on to the last category.
+- Fixed: a brightness flash when changing category; the app could crash when Seerr did not answer.
+- Pictures load faster over https: a new connection reuses the earlier TLS session, and small writes go out at once.
 
 ## 1.0.0-beta.3 (2026-10-13)
 
