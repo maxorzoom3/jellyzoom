@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- A loading wheel keeps the previous backdrop and floor until its own colours are ready.
+- Loading wheels show a flat page of colour that fades into the dark blend; no flicker.
+- Season posters are fetched together, so scrolling the seasons no longer flicks the poster.
+- Categories show the previous colours while loading instead of going black on the first trip round.
+- The start screen no longer shows the loading text.
+- Show page: season drop-down with the season's poster; Back from the episodes returns to the show page.
+- Episode page: the show's logo above the list.
+- Quick Connect sign-in: a QR code opens the server's Quick Connect page on your phone.
+- TV shows: choose the season on the show's page (no seasons wheel); Cross opens that season's episodes.
+- Episode page: the season's own poster, episode ratings, and the tab highlight stays put.
+- Discover: an administrator can cancel any request; failures say why.
+- The Mortalfin logo: full size at start, then it moves to the top-left corner.
+- Discover: Circle on a title you requested cancels the request (asked twice, to be sure).
+- Collections open straight to their films.
+- Episode list: the series' picture behind it, with the list and summary on panels.
 ## 1.0.0-beta.4 (2026-10-14)
 
 - Discover: Options on a movie or series shows its cast; pick an actor for their films and series (with Request) and what

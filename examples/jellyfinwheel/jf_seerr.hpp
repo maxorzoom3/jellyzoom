@@ -195,7 +195,7 @@ inline bool request(const std::string &hostSpec, int port, const char *method, c
 
 	std::string req = std::string(method) + " " + path + " HTTP/1.1\r\nHost: " + vhost +
 		"\r\nAccept: */*\r\nUser-Agent: Mortalfin\r\nConnection: close\r\n" + extraHeaders;
-	if (!body.empty() || std::strcmp(method, "POST") == 0) {
+	if (!body.empty() || std::strcmp(method, "POST") == 0 || std::strcmp(method, "DELETE") == 0) {
 		req += "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
 	}
 	req += "\r\n" + body;
@@ -760,6 +760,145 @@ inline void startRequest(int uid, long long id)
 						}
 					}
 				}
+			}
+			if (done) {
+				st.notice = note;
+			} else {
+				st.message = problem;
+			}
+		}
+		if (done) {
+			st.noticeSerial++;
+		}
+		st.busy--;
+	}).detach();
+}
+
+// Cancels the user's own request(s) for a title: looks up its requests, deletes the ones this user made
+inline void startCancel(long long id, const std::string &type, const std::string &title, bool mine)
+{
+	State &s = state();
+	std::string host, cookie;
+	int port;
+	long long me;
+	{
+		std::lock_guard<std::mutex> g(s.m);
+		host = s.host;
+		port = s.port;
+		cookie = cookieHeader(s);
+		me = s.myUserId;
+		s.message.clear();
+	}
+	s.busy++;
+	std::thread([host, port, cookie, id, type, title, mine, me]() {
+		State &st = state();
+		std::string note, problem;
+		bool done = false;
+		long long userId = me;
+		Http who;
+		long long perms = 0;
+		if (request(host, port, "GET", "/api/v1/auth/me", cookie, "", &who) && who.status == 200) {
+			if (json_object *o = json_tokener_parse(who.body.c_str())) {
+				userId = jint(o, "id");
+				perms = jint(o, "permissions");
+				json_object_put(o);
+			}
+		}
+		// an administrator (2) or someone who manages requests (16) may cancel anybody's request
+		const bool manager = (perms & (2 | 16)) != 0;
+		std::vector<long long> mineIds;
+		int others = 0;
+		Http d;
+		if (!request(host, port, "GET", "/api/v1/" + type + "/" + std::to_string(id), cookie, "", &d)) {
+			problem = unreachable(host, port);
+		} else if (d.status == 401) {
+			st.needLogin = 1;
+			problem = "Sign in to Seerr again";
+		} else if (d.status != 200) {
+			problem = statusText(d.status);
+		} else if (json_object *t = json_tokener_parse(d.body.c_str())) {
+			json_object *requests = jget(jget(t, "mediaInfo"), "requests");
+			const int n = (requests && json_object_is_type(requests, json_type_array)) ? static_cast<int>(json_object_array_length(requests)) : 0;
+			for (int i = 0; i < n; i++) {
+				json_object *r = json_object_array_get_idx(requests, i);
+				if (jint(r, "status") == 3) {
+					continue; // already declined: nothing to cancel
+				}
+				if (manager || (userId > 0 && jint(jget(r, "requestedBy"), "id") == userId)) {
+					mineIds.push_back(jint(r, "id"));
+				} else {
+					others++;
+				}
+			}
+			json_object_put(t);
+		}
+		if (problem.empty()) {
+			if (mineIds.empty()) {
+				problem = others > 0 ? "Only the person who asked can cancel this request" : "No request of yours to cancel";
+			} else {
+				int failed = 0;
+				std::string why;
+				for (long long rid : mineIds) {
+					Http r;
+					const std::string path = "/api/v1/request/" + std::to_string(rid);
+					bool ok = request(host, port, "DELETE", path, cookie, "", &r) && (r.status == 200 || r.status == 204);
+					if (!ok && r.status != 0 && r.status != 401 && manager) {
+						// some versions want a request declined before it can go
+						Http dec;
+						request(host, port, "POST", path + "/decline", cookie, "{}", &dec);
+						Http again;
+						ok = request(host, port, "DELETE", path, cookie, "", &again) && (again.status == 200 || again.status == 204);
+						if (!ok) {
+							r = again;
+						}
+					}
+					if (!ok) {
+						failed++;
+						if (why.empty()) {
+							// what Seerr itself said, so the reason can be read on screen
+							std::string said;
+							if (json_object *o = json_tokener_parse(r.body.c_str())) {
+								said = jstr(o, "message");
+								json_object_put(o);
+							}
+							why = r.status == 0 ? std::string("no answer") : "HTTP " + std::to_string(r.status);
+							if (!said.empty()) {
+								why += ": " + said.substr(0, 60);
+							}
+						}
+					}
+				}
+				if (failed == 0) {
+					note = "Cancelled the request for " + title;
+					done = true;
+				} else {
+					problem = "Seerr would not cancel the request (" + why + ")";
+				}
+			}
+		}
+		{
+			std::lock_guard<std::mutex> g(st.m);
+			const auto apply = [&](std::vector<Row> &rows) {
+				for (Row &row : rows) {
+					for (size_t i = 0; i < row.cards.size(); i++) {
+						Card &c = row.cards[i];
+						if (c.id == id && c.type == type) {
+							c.asking = false;
+							if (done && others == 0) {
+								c.status = 1;
+								c.requestState = 0;
+							}
+						}
+					}
+					if (done && others == 0 && row.mine) {
+						row.cards.erase(std::remove_if(row.cards.begin(), row.cards.end(),
+							[&](const Card &c) { return c.id == id && c.type == type; }), row.cards.end());
+					}
+				}
+			};
+			apply(st.rows);
+			for (Level &level : st.stack) {
+				apply(level.rows);
 			}
 			if (done) {
 				st.notice = note;
@@ -1392,6 +1531,9 @@ class Screen
 	DestroyTexture destroy_;
 	bool open_{ false }, busy_{ false }, kb_{ false }, showText_{ true }, connecting_{ false };
 	bool needSignIn_{ false }, autoAsk_{ false }, wantTabs_{ false };
+	long long cancelId_{ 0 }; // Circle was pressed once on this requested title: a second press within a few seconds cancels
+	std::string cancelType_;
+	float cancelClock_{ 0.0f };
 	bool fromLibrary_{ false }; // the cast page on show was asked for by a film page: Back leaves the tab
 	bool pad_{ false }; // the page (not the tabs) has the pad: it draws its own button legend
 	Ask ask_{ Ask::search };
@@ -1860,6 +2002,53 @@ class Screen
 	void browse(const hui::InputFrame &in, float dt, Feedback &fb)
 	{
 		State &s = state();
+		if (cancelClock_ > 0.0f) {
+			cancelClock_ = std::max(0.0f, cancelClock_ - dt);
+			if (cancelClock_ <= 0.0f || in.nav != hui::Direction::none || in.is_pressed(hui::Action::confirm) ||
+				in.is_pressed(hui::Action::menu)) {
+				cancelClock_ = 0.0f; // the moment passed, or the cursor moved on: nothing is cancelled
+				std::lock_guard<std::mutex> g(s.m);
+				s.message.clear();
+			}
+		}
+		if (in.is_pressed(hui::Action::back) && cancellableSelection()) {
+			// CIRCLE on a title that was requested: cancel the request (asked twice, so a slip does no harm)
+			long long id = 0;
+			std::string type, title;
+			bool mine = false;
+			{
+				std::lock_guard<std::mutex> g(s.m);
+				const Row &row = s.rows[static_cast<size_t>(selRow_)];
+				const Card &c = row.cards[static_cast<size_t>(selCol_[static_cast<size_t>(selRow_)])];
+				id = c.id;
+				type = c.type;
+				title = c.title;
+				mine = row.mine;
+			}
+			if (cancelClock_ > 0.0f && cancelId_ == id && cancelType_ == type) {
+				cancelClock_ = 0.0f;
+				fb.play(hui::audio::Cue::open);
+				{
+					std::lock_guard<std::mutex> g(s.m);
+					for (Row &row : s.rows) {
+						for (Card &c : row.cards) {
+							if (c.id == id && c.type == type) {
+								c.asking = true;
+							}
+						}
+					}
+				}
+				startCancel(id, type, title, mine);
+			} else {
+				cancelId_ = id;
+				cancelType_ = type;
+				cancelClock_ = 5.0f;
+				fb.play(hui::audio::Cue::focus);
+				std::lock_guard<std::mutex> g(s.m);
+				s.message = "Cancel the request for " + clipText(title, 40) + "?  Press Circle again";
+			}
+			return;
+		}
 		if (in.is_pressed(hui::Action::back)) {
 			fb.play(hui::audio::Cue::back);
 			bool atBase = false;
@@ -2197,6 +2386,26 @@ class Screen
 		}
 	}
 
+	// The title under the cursor was requested and its request can be cancelled (not available yet, not declined)
+	bool cancellableSelection() const
+	{
+		State &s = state();
+		std::lock_guard<std::mutex> g(s.m);
+		if (selRow_ < 0 || selRow_ >= static_cast<int>(s.rows.size()) || selRow_ >= static_cast<int>(selCol_.size())) {
+			return false;
+		}
+		const Row &row = s.rows[static_cast<size_t>(selRow_)];
+		const int col = selCol_[static_cast<size_t>(selRow_)];
+		if (col < 0 || col >= static_cast<int>(row.cards.size())) {
+			return false;
+		}
+		const Card &c = row.cards[static_cast<size_t>(col)];
+		if ((c.type != "movie" && c.type != "tv") || c.asking) {
+			return false;
+		}
+		return row.mine ? (c.requestState == 1 || c.requestState == 2) && c.status < 5 : (c.status == 2 || c.status == 3);
+	}
+
 	// The button legend along the bottom: it follows what is under the cursor (an actor is Selected, a title is Requested)
 	void drawLegend(hui::gfx::DrawList &list, const hui::ui::Fonts &fonts) const
 	{
@@ -2231,7 +2440,7 @@ class Screen
 			hints[n++] = { hui::ui::Button::square, "Search" };
 			hints[n++] = { hui::ui::Button::triangle, "Disconnect" };
 		}
-		hints[n++] = { hui::ui::Button::circle, inPage ? "Back" : "Tabs" };
+		hints[n++] = { hui::ui::Button::circle, cancellableSelection() ? "Cancel request" : inPage ? "Back" : "Tabs" };
 		hui::ui::draw_hints(list, fonts, hui::ui::GlyphStyle::dark(), hints, n, 1824, true);
 	}
 

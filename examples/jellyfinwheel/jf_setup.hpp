@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+#include "jf_qr.hpp"
 
 namespace jfsetup {
 
@@ -140,7 +141,9 @@ class Screen
 	float clock_{ 0.0f }, refreshIn_{ 0.0f };
 	std::vector<Item> items_;
 	int sel_{ 0 };
-	std::string message_, serverName_, quickCode_;
+	std::string message_, serverName_, quickCode_, quickUrl_;
+	mutable std::string qrText_;
+	mutable jfqr::Code qrCode_;
 	int quickState_{ 0 };
 	int searching_{ 0 };
 	size_t foundCount_{ 0 };
@@ -166,6 +169,8 @@ class Screen
 		serverName_ = buf;
 		jf_gate_auth_text(3, buf, sizeof(buf));
 		quickCode_ = buf;
+		jf_gate_auth_text(4, buf, sizeof(buf));
+		quickUrl_ = buf;
 		quickState_ = jf_gate_auth_quick_state();
 		searching_ = jf_gate_auth_discover_state();
 		if (started_ && page_ == Page::servers && !keyboardOpen_) {
@@ -536,6 +541,42 @@ class Screen
 		}
 	}
 
+	void drawQr(hui::gfx::DrawList &list, const hui::gfx::Rect &box, const std::string &url) const
+	{
+		using hui::gfx::Color;
+		using hui::gfx::Rect;
+		if (qrText_ != url) {
+			qrCode_ = jfqr::encode(url);
+			qrText_ = url;
+		}
+		if (qrCode_.size <= 0) {
+			return;
+		}
+		list.rounded_rect(box, 22.0f, Color{ 1, 1, 1, 1 });
+		const int n = qrCode_.size;
+		const int px = std::max(1, static_cast<int>(std::floor(box.w / static_cast<float>(n + 6))));
+		const float side = static_cast<float>(px * n);
+		const float ox = box.x + (box.w - side) * 0.5f;
+		const float oy = box.y + (box.h - side) * 0.5f;
+		for (int row = 0; row < n; ++row) {
+			int col = 0;
+			while (col < n) {
+				if (!qrCode_.dark(col, row)) {
+					++col;
+					continue;
+				}
+				int end = col;
+				while (end < n && qrCode_.dark(end, row)) {
+					++end;
+				}
+				list.rounded_rect(Rect{ ox + static_cast<float>(col * px), oy + static_cast<float>(row * px),
+										static_cast<float>((end - col) * px), static_cast<float>(px) },
+					0.0f, Color{ 0, 0, 0, 1 });
+				col = end;
+			}
+		}
+	}
+
 	void drawQuick(hui::gfx::DrawList &list, const hui::ui::Fonts &fonts) const
 	{
 		using hui::gfx::Color;
@@ -548,11 +589,19 @@ class Screen
 					spaced += ' ';
 				}
 			}
-			hui::ui::text(list, fonts.display, spaced.c_str(), 960.0f, 560.0f, 150, Color{ 1, 1, 1, 1 }, Align::center);
-			hui::ui::text(list, fonts.regular, "On a phone or computer signed in to Jellyfin:", 960.0f, 680.0f, 32,
+			const float cx = quickUrl_.empty() ? 960.0f : 700.0f; // the code, and beside it the QR for the phone
+			hui::ui::text(list, fonts.display, spaced.c_str(), cx, 560.0f, quickUrl_.empty() ? 150 : 120, Color{ 1, 1, 1, 1 }, Align::center);
+			hui::ui::text(list, fonts.regular, "On a phone or computer signed in to Jellyfin:", cx, 680.0f, 30,
 				Color{ 1, 1, 1, 0.75f }, Align::center);
-			hui::ui::text(list, fonts.regular, "open your profile > Quick Connect and type this code.", 960.0f, 728.0f, 32,
+			hui::ui::text(list, fonts.regular, "open your profile > Quick Connect and type this code.", cx, 724.0f, 30,
 				Color{ 1, 1, 1, 0.75f }, Align::center);
+			if (!quickUrl_.empty()) {
+				drawQr(list, hui::gfx::Rect{ 1170.0f, 400.0f, 320.0f, 320.0f }, quickUrl_);
+				hui::ui::text(list, fonts.regular, "Or scan this to open Quick Connect", 1330.0f, 770.0f, 26, Color{ 1, 1, 1, 0.75f },
+					Align::center);
+				hui::ui::text(list, fonts.regular, "on your phone, then type the code.", 1330.0f, 804.0f, 26, Color{ 1, 1, 1, 0.75f },
+					Align::center);
+			}
 		} else if (quickState_ == -1) {
 			hui::ui::text(list, fonts.regular, "That did not work. Press Circle to go back.", 960.0f, 560.0f, 36,
 				Color{ 1, 1, 1, 0.75f }, Align::center);

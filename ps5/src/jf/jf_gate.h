@@ -143,6 +143,21 @@ int jf_gate_details_get(int gate_index, JfGateDetails *out);
  * The children are listed by one more category (kind 6) that has no tab. Opening a title there starts it over. */
 /* Lists the children of the title at this gate index; returns the category that holds them, or -1. */
 int jf_gate_browse_open(int gate_index);
+/* A series' seasons, for the season choice on its page. Asking again is free. */
+#define JF_GATE_SEASONS 40
+typedef struct {
+	char name[64];
+	int number;   /* 0 for Specials */
+	int episodes;
+	int unplayed;
+} JfGateSeason;
+/* 1 when they are here, 0 while on their way, -1 when the server would not say */
+int jf_gate_seasons_request(int gate_index);
+/* Copies up to max out; returns how many (0 while loading) */
+int jf_gate_seasons_get(int gate_index, JfGateSeason *out, int max);
+/* Opens one season's episodes straight away (the series' other level is skipped); returns the category or -1 */
+int jf_gate_season_open(int gate_index, int season);
+
 /* One level back: 1 when the list now shows the parent's children again, 0 when there is nothing to go back to. */
 int jf_gate_browse_back(void);
 
@@ -170,6 +185,12 @@ int jf_gate_take_poster(JfGatePoster *out);
 /* The program dropped this poster's texture: the worker may fetch it again later. */
 void jf_gate_poster_released(int category, int position);
 
+/* The poster of one season of a series (for the series' page while a season is being chosen). Asking for another replaces
+ * the one not yet fetched. A season with no picture is simply never delivered.
+ * In the poster that comes back, category is the series' gate index and position the season's place in its list. */
+void jf_gate_season_poster_want(int gate_index, int season);
+int jf_gate_season_poster_take(JfGatePoster *out);
+
 /* 1 once the worker has stopped, 2 if it could not sign in or list the libraries. */
 int jf_gate_finished(void);
 
@@ -179,7 +200,7 @@ int jf_gate_finished(void);
 /* 0 working, 1 needs a server, 2 needs a sign-in (server known), 3 signed in */
 int jf_gate_auth_state(void);
 int jf_gate_auth_busy(void); /* 1 while the worker is on a request the screen made */
-/* 0 the last problem ("" if none), 1 the server's name, 2 the signed-in profile, 3 the Quick Connect code */
+/* 0 the last problem ("" if none), 1 the server's name, 2 the signed-in profile, 3 the Quick Connect code, 4 the server's Quick Connect page (for a QR code) */
 void jf_gate_auth_text(int which, char *out, int size);
 /* The server's public profiles: returns how many; copies profile 'index' when it is in range. */
 int jf_gate_auth_users(int index, char *out, int size);

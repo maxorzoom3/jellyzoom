@@ -448,11 +448,27 @@ class Shelf
     // this wheel's own, instead of jumping to whatever this wheel last had (that jump was a flash of brightness)
     void take_palette_from(const Shelf &old)
     {
-        if (count_ <= 0 || old.count_ <= 0)
+        if (old.count_ <= 0)
             return;
         for (int i = 0; i < 5; ++i)
             palette_[i].snap(old.palette_[i].value());
-        apply_palette(false);
+        if (count_ > 0)
+            apply_palette(false); // (waits for the cover's own colours if it has none yet)
+        else
+            inherit_ = true; // this wheel is still loading: it shows the old wheel's backdrop and floor meanwhile, never black
+    }
+
+    // The backdrop of a wheel (also while it is still loading, in the colours it took over)
+    void set_backdrop(app::Frame &frame) const
+    {
+        frame.backdrop.mode = gfx::BackdropMode::gradient;
+        frame.backdrop.colors[0] = palette_[0].value();
+        frame.backdrop.colors[1] = palette_[1].value();
+        frame.backdrop.colors[2] = palette_[2].value();
+        frame.backdrop.params[0] = 0.5f;
+        frame.backdrop.params[1] = 0.34f;
+        frame.backdrop.params[2] = 0.5f + (reduced() ? 0.0f : 0.06f * ui::breathe(clock_, 5.0f));
+        frame.backdrop.time = clock_;
     }
 
     void enter()
@@ -461,7 +477,10 @@ class Shelf
         age_ = 0.0f;
         cue_t_ = -1.0f; // no hop or ring left over from the last visit
         cue_y_ = cue_flash_ = 0.0f;
-        open_ = false;
+        if (hold_open_)
+            hold_open_ = false; // back from a show's episodes: its page is as it was left
+        else
+            open_ = false;
         launch_.running = false;
         if (count_ > 0)
         {
@@ -499,6 +518,8 @@ class Shelf
         else
             update_wheel(input, feedback);
         spin(dt, feedback);
+        if (!palette_real_ && item(centre_).hasPoster)
+            apply_palette(false);
 
         // ---- animation state ----
         const float speed = std::fabs(wheel_.velocity);
@@ -509,8 +530,19 @@ class Shelf
         lift_.target = open_ ? 1.0f : 0.0f;
         lift_.update(dt, reduced() ? 40.0f : 11.0f);
         // the program puts the opened title's backdrop behind its page (a wheel that is closed says nothing)
-        if (open_ || lift_.value > 0.01f)
-            ::jf::openedTitle() = open_ ? item(opened_).gateIndex : -1;
+        {
+            // an episode list shows the series' picture behind it too (one stable number for the whole list, so the
+            // picture is not asked for again at every step)
+            const int page_title = episode_mode() ? item(0).gateIndex : -1;
+            if (open_ || lift_.value > 0.01f)
+                ::jf::openedTitle() = open_ ? (page_title >= 0 ? page_title : item(opened_).gateIndex) : page_title;
+            else if (page_title >= 0)
+                ::jf::openedTitle() = page_title;
+            else if (ep_backdrop_)
+                ::jf::openedTitle() = -1;
+            ep_backdrop_ = page_title >= 0;
+            ::jf::logoWant() = page_title; // the series' logo for the episode page
+        }
         launch_.update(dt);
         star_.update(dt, 5.0f);
         poll_badges(dt);
@@ -523,18 +555,17 @@ class Shelf
         gfx::DrawList &list = frame.scene;
         if (count_ == 0 || stale())
         {
+            if (inherit_)
+            {
+                // exactly what the wheel before drew (backdrop and floor), so nothing changes until this wheel's colours come
+                set_backdrop(frame);
+                draw_floor(list);
+            }
             draw_waiting(list);
             return;
         }
         // A spotlight in the centred cover's body colour, behind the row.
-        frame.backdrop.mode = gfx::BackdropMode::gradient;
-        frame.backdrop.colors[0] = palette_[0].value();
-        frame.backdrop.colors[1] = palette_[1].value();
-        frame.backdrop.colors[2] = palette_[2].value();
-        frame.backdrop.params[0] = 0.5f;
-        frame.backdrop.params[1] = 0.34f;
-        frame.backdrop.params[2] = 0.5f + (reduced() ? 0.0f : 0.06f * ui::breathe(clock_, 5.0f));
-        frame.backdrop.time = clock_;
+        set_backdrop(frame);
         draw_floor(list);
         draw_header(list);
     }
@@ -611,7 +642,11 @@ class Shelf
         target_ = centre_ = opened_ = std::min(kStart, count_ - 1);
         wheel_.snap(static_cast<float>(target_));
         calm_.snap(1.0f);
-        apply_palette(true);
+        if (inherit_ && !item(centre_).hasPoster)
+            palette_real_ = false; // keep the colours taken over until the first cover is here
+        else
+            apply_palette(!inherit_);
+        inherit_ = false;
         ep_placed_ = false;
         ep_wait_ = 0.0f;
         ep_top_ = 0;
@@ -676,6 +711,9 @@ class Shelf
     void apply_palette(bool snap)
     {
         const ::jf::Item &it = item(centre_);
+        palette_real_ = it.hasPoster;
+        if (!it.hasPoster && !snap)
+            return; // no colours yet: keep the ones showing; update() applies them when the cover arrives
         const Color sky = gfx::mix(it.dark, it.mid, 0.3f);
         const Color ground = gfx::mix(it.dark, it.mid, 0.12f);
         const Color targets[5] = {
@@ -887,9 +925,10 @@ class Shelf
                 feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
                 return;
             }
-            if (item(current()).kindRaw == "Season")
+            if (item(current()).kindRaw == "Season" || item(current()).kindRaw == "BoxSet")
             {
-                // a season has nothing to say that its series did not: straight to its episodes
+                // a season has nothing to say that its series did not: straight to its episodes; a collection goes straight to
+                // its films
                 ::jf::browseRequest() = item(current()).gateIndex;
                 feedback.play(audio::Cue::open);
                 return;
@@ -908,7 +947,8 @@ class Shelf
     {
         none,
         audio,
-        subs
+        subs,
+        season
     };
     struct PickRow
     {
@@ -945,12 +985,16 @@ class Shelf
 
     void begin_details()
     {
-        focus_ = 0;
+        focus_ = (opened_ >= 0 && opened_ < count_ && item(opened_).kindRaw == "Series") ? 1 : 0; // a show opens on Episodes
         modal_ = Modal::none;
         modal_shown_ = Modal::none;
         modal_amt_ = 0.0f;
         det_state_ = 0;
         det_wait_ = 0.0f;
+        seasons_n_ = 0;
+        season_state_ = 0;
+        season_sel_ = 0;
+        season_wait_ = 0.0f;
         std::memset(&det_, 0, sizeof(det_));
         det_.default_audio = -1;
         det_.default_subtitle = -1;
@@ -1018,6 +1062,11 @@ class Shelf
     {
         int n = 0;
         ids[n++] = 0;
+        if (is_series())
+        {
+            ids[n++] = 1; // the season (a drop-down) and the episodes
+            return n;
+        }
         if (resumable())
             ids[n++] = 1;
         ids[n++] = 2;
@@ -1025,8 +1074,105 @@ class Shelf
         return n;
     }
 
+    // A series page: its seasons, for the season choice
+    bool is_series() const
+    {
+        return open_ && opened_ >= 0 && opened_ < count_ && item(opened_).kindRaw == "Series";
+    }
+
+    void poll_seasons(float dt)
+    {
+        if (!is_series() || season_state_ != 0)
+            return;
+        season_wait_ -= dt;
+        if (season_wait_ > 0.0f)
+            return;
+        season_wait_ = 0.25f;
+        const int gate = item(opened_).gateIndex;
+        const int state = ::jf_gate_seasons_request(gate);
+        if (state == 1)
+        {
+            seasons_n_ = ::jf_gate_seasons_get(gate, seasons_, JF_GATE_SEASONS);
+            season_state_ = seasons_n_ > 0 ? 1 : -1;
+            // the first season with something left to watch (not the specials), else the first season
+            season_sel_ = 0;
+            int first = -1;
+            for (int i = 0; i < seasons_n_; ++i)
+                if (seasons_[i].number > 0)
+                {
+                    if (first < 0)
+                        first = i;
+                    if (seasons_[i].unplayed > 0)
+                    {
+                        season_sel_ = i;
+                        first = -2;
+                        break;
+                    }
+                }
+            if (first >= 0)
+                season_sel_ = first;
+        }
+        else if (state < 0)
+            season_state_ = -1;
+    }
+
+    // Which season is meant right now (the one the drop-down is on, while it is open)
+    // and the want for its poster
+    void update_season_want()
+    {
+        if (is_series() && season_state_ == 1)
+        {
+            ::jf::SeasonWant &want = ::jf::seasonWant();
+            want.gate = item(opened_).gateIndex;
+            want.season = season_sel_;
+        }
+    }
+
+    // The cover as drawn: on a show's page it is the chosen season's poster, once that has come
+    std::uint32_t cover_of(int index) const
+    {
+        const ::jf::Item &it = item(index);
+        if (open_ && index == opened_ && season_state_ == 1 && it.kindRaw == "Series")
+        {
+            const auto &covers = ::jf::seasonCovers();
+            const auto found = covers.find(::jf::seasonKey(it.gateIndex, season_sel_));
+            if (found != covers.end() && found->second.tex)
+            {
+                shown_season_tex_ = found->second.tex;
+                shown_season_gate_ = it.gateIndex;
+                return found->second.tex;
+            }
+            // not here yet: keep the last season's poster of this show rather than flicking back to the show's own
+            if (shown_season_gate_ == it.gateIndex && shown_season_tex_)
+                return shown_season_tex_;
+        }
+        return it.cover;
+    }
+
+    void open_season_list(app::Feedback &feedback)
+    {
+        rows_.clear();
+        for (int i = 0; i < seasons_n_; ++i)
+        {
+            char note[64];
+            if (seasons_[i].unplayed > 0)
+                std::snprintf(note, sizeof(note), "%d episode%s  -  %d to watch", seasons_[i].episodes,
+                              seasons_[i].episodes == 1 ? "" : "s", seasons_[i].unplayed);
+            else
+                std::snprintf(note, sizeof(note), "%d episode%s  -  all watched", seasons_[i].episodes,
+                              seasons_[i].episodes == 1 ? "" : "s");
+            rows_.push_back({i, seasons_[i].name, note, true});
+        }
+        cursor_ = season_sel_;
+        season_before_ = season_sel_;
+        modal_ = Modal::season;
+        feedback.play(audio::Cue::open);
+    }
+
     void poll_details(float dt)
     {
+        poll_seasons(dt);
+        update_season_want();
         if (det_state_ != 0)
             return;
         det_wait_ -= dt;
@@ -1172,6 +1318,27 @@ class Shelf
     void activate(app::Feedback &feedback)
     {
         const ::jf::Item &it = item(opened_);
+        if (is_series())
+        {
+            if (season_state_ != 1)
+            {
+                feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+                return;
+            }
+            if (focus_ == 0)
+            {
+                open_season_list(feedback); // the drop-down
+                return;
+            }
+            // the chosen season's episodes, no wheel in between; Back comes to this page again
+            ::jf::browseSeason() = season_sel_;
+            ::jf::browseRequest() = it.gateIndex;
+            feedback.play(audio::Cue::open);
+            hold_open_ = list_.kind != 6;
+            if (!hold_open_)
+                open_ = false;
+            return;
+        }
         switch (focus_)
         {
         case 0:
@@ -1242,6 +1409,8 @@ class Shelf
         if (input.is_pressed(Action::back))
         {
             feedback.play(audio::Cue::back);
+            if (modal_ == Modal::season)
+                season_sel_ = season_before_;
             modal_ = Modal::none;
             return;
         }
@@ -1253,6 +1422,8 @@ class Shelf
             {
                 cursor_ = next;
                 feedback.play(audio::Cue::tab, 1.1f, 0.0f, 0.6f);
+                if (modal_ == Modal::season)
+                    season_sel_ = rows_[static_cast<std::size_t>(cursor_)].stream; // the poster follows the choice
             }
         }
         if (input.is_pressed(Action::confirm) && cursor_ >= 0 && cursor_ < static_cast<int>(rows_.size()))
@@ -1265,6 +1436,8 @@ class Shelf
             }
             if (modal_ == Modal::audio)
                 pick_audio_ = row.stream;
+            else if (modal_ == Modal::season)
+                season_sel_ = row.stream;
             else
                 pick_sub_ = row.stream;
             feedback.play(audio::Cue::focus, 1.14f, 0.0f, 0.9f);
@@ -1547,7 +1720,8 @@ class Shelf
     void draw_floor(gfx::DrawList &list) const
     {
         // a title's backdrop picture shows through the floor while its page is open
-        const float see = 1.0f - 0.94f * tween::clamp01(::jf::backdropShown() * lift_.value);
+        const float shown = std::max(lift_.value, episode_mode() ? 1.0f : 0.0f);
+        const float see = 1.0f - 0.94f * tween::clamp01(::jf::backdropShown() * shown);
         const Color top = floor_at(kFloorY);
         list.gradient_rect({0, kFloorY - kHorizon, gfx::kVirtualWidth, kHorizon}, 0,
                            top.with_alpha(0.0f), top.with_alpha(see));
@@ -1607,7 +1781,7 @@ class Shelf
             // nothing is left.
             const Rect mirror{r.x, r.y + r.h + 3.0f * k, r.w, r.h * kReflectPart * kReflectSquash};
             const float light = p.light * kReflectLight;
-            list.image(it.cover, mirror, {0.0f, 1.0f, 1.0f, -kReflectPart},
+            list.image(cover_of(index), mirror, {0.0f, 1.0f, 1.0f, -kReflectPart},
                        {light, light, light, 1.0f}, radius);
             const Rect veil{mirror.x - 1.0f, mirror.y, mirror.w + 2.0f, mirror.h + 2.0f};
             const float haze = 1.0f - p.reflect * (1.0f - kReflectHaze);
@@ -1625,7 +1799,7 @@ class Shelf
             list.glow(r.inset(24.0f), radius, 80.0f,
                       it.accent.with_alpha((0.24f + 0.1f * breath) * focus));
         }
-        list.image(it.cover, r, gfx::kFullUv, {p.light, p.light, p.light, 1.0f}, radius);
+        list.image(cover_of(index), r, gfx::kFullUv, {p.light, p.light, p.light, 1.0f}, radius);
         list.bordered_rect(r, radius, kClear, 1.5f, kWhite.with_alpha(0.16f * p.light));
 
         draw_badges(list, it, r, k, p.light);
@@ -1749,14 +1923,44 @@ class Shelf
         const float lx = 96.0f, lw = 800.0f;
         char text[96];
 
+        // the series' picture is behind the list: a veil over it, and each side on a dark panel so the words read
+        list.rounded_rect(Rect{0.0f, 0.0f, gfx::kVirtualWidth, gfx::kVirtualHeight}, 0.0f,
+                          kNight.with_alpha(0.42f * ::jf::backdropShown() * fade));
+        {
+            const Color panel = Color{0.03f, 0.04f, 0.085f, 0.70f * fade};
+            const Rect left{lx - 36.0f, 128.0f, lw + 72.0f, 826.0f}, right{944.0f, 140.0f, 880.0f + 36.0f, 814.0f};
+            list.shadow({left.x, left.y + 16.0f, left.w, left.h}, 36.0f, 50.0f, kBlack.with_alpha(0.4f * fade));
+            list.rounded_rect(left, 36.0f, panel);
+            list.bordered_rect(left, 36.0f, kClear, 1.5f, kWhite.with_alpha(0.16f * fade));
+            list.shadow({right.x, right.y + 16.0f, right.w, right.h}, 36.0f, 50.0f, kBlack.with_alpha(0.4f * fade));
+            list.rounded_rect(right, 36.0f, panel);
+            list.bordered_rect(right, 36.0f, kClear, 1.5f, kWhite.with_alpha(0.16f * fade));
+        }
         std::snprintf(text, sizeof(text), "%d episode%s", count_, count_ == 1 ? "" : "s");
-        ui::text(list, fonts.display, fonts.display.font->fit(list_.name.empty() ? "Episodes" : list_.name.c_str(), 46, lw), lx, 168.0f, 46,
-                 kWhite.with_alpha(fade));
-        ui::text(list, fonts.regular, text, lx, 206.0f, 22, kWhite.with_alpha(0.55f * fade));
+        // the series' own logo, centred over the list (its name in words while there is none)
+        const float head_cx = lx + lw * 0.5f;
+        {
+            const ::jf::LogoInfo &logo = ::jf::logoInfo();
+            const int gate = item(0).gateIndex;
+            if (logo.gate == gate && logo.tex && logo.w > 0 && logo.h > 0)
+            {
+                const float scale = std::min(560.0f / static_cast<float>(logo.w), 78.0f / static_cast<float>(logo.h));
+                const float w = static_cast<float>(logo.w) * scale, h = static_cast<float>(logo.h) * scale;
+                const Rect r{head_cx - w * 0.5f, 158.0f + (78.0f - h) * 0.5f, w, h};
+                list.image(logo.tex, {r.x + 2.0f, r.y + 4.0f, r.w, r.h}, gfx::kFullUv, {0.0f, 0.0f, 0.0f, 0.45f * fade}, 0.0f);
+                list.image(logo.tex, r, gfx::kFullUv, {1.0f, 1.0f, 1.0f, fade}, 0.0f);
+            }
+            else if (logo.gate == gate && logo.state < 0)
+            {
+                const std::string name(fonts.display.font->fit(list_.name.empty() ? "Episodes" : list_.name.c_str(), 46, lw - 60.0f));
+                ui::text(list, fonts.display, name.c_str(), head_cx, 212.0f, 46, kWhite.with_alpha(fade), gfx::Align::center);
+            }
+        }
+        ui::text(list, fonts.regular, text, head_cx, 262.0f, 22, kWhite.with_alpha(0.55f * fade), gfx::Align::center);
 
         // The rows stand still (they only scroll when the choice runs off the end); the bar is what moves
-        const float list_top = 250.0f;
-        list.push_clip(Rect{0.0f, 236.0f, 930.0f, row_h * 7.0f + 20.0f});
+        const float list_top = 284.0f;
+        list.push_clip(Rect{0.0f, 272.0f, 930.0f, row_h * 7.0f + 12.0f});
         for (int i = std::max(0, static_cast<int>(std::floor(ep_top_f_)) - 1);
              i <= std::min(count_ - 1, static_cast<int>(std::ceil(ep_top_f_)) + 7); ++i)
         {
@@ -1782,11 +1986,21 @@ class Shelf
                 list.rounded_rect(Rect{row.x + 150.0f, ty - 9.0f, 360.0f, 18.0f}, 9.0f, kWhite.with_alpha(0.08f * a));
                 continue;
             }
-            const std::string title(fonts.semibold.font->fit(it.title, 28, lw - 150.0f - (it.runtime[0] ? 150.0f : 40.0f)));
+            const bool rated = it.rating > 0.0f;
+            const std::string title(fonts.semibold.font->fit(it.title, 28, lw - 150.0f - (it.runtime[0] ? 150.0f : 40.0f) - (rated ? 100.0f : 0.0f)));
             ui::text(list, fonts.semibold, title.c_str(), row.x + 140.0f, ty + 10.0f, 28, kWhite.with_alpha(a));
             if (it.runtime[0])
                 ui::text(list, fonts.regular, it.runtime, row.x + row.w - 28.0f, ty + 8.0f, 22, kWhite.with_alpha(0.6f * a),
                          gfx::Align::right);
+            if (rated)
+            {
+                // the episode's rating, out of 10, beside its length
+                char score[16];
+                std::snprintf(score, sizeof(score), "%.1f", static_cast<double>(it.rating * 2.0f));
+                const float rx = row.x + row.w - (it.runtime[0] ? 160.0f : 28.0f);
+                ui::text(list, fonts.semibold, score, rx, ty + 8.0f, 22, kWhite.with_alpha(0.85f * a), gfx::Align::right);
+                list.star(rx - fonts.semibold.measure(score, 22) - 22.0f, ty - 2.0f, 9.0f, kGold.with_alpha(a));
+            }
             if (it.progress > 0.01f && !it.watched)
             {
                 const Rect bar{row.x + 140.0f, row.y + row.h - 14.0f, row.w - 140.0f - 28.0f, 4.0f};
@@ -1804,55 +2018,78 @@ class Shelf
 
         // the chosen episode
         const ::jf::Item &it = item(sel);
-        const float px = 980.0f, pw = 844.0f;
-        const float thumb_h = std::min(pw * (it.aspect > 0.2f ? it.aspect : 0.5625f), 440.0f);
-        const float thumb_w = thumb_h / (it.aspect > 0.2f ? it.aspect : 0.5625f);
-        const Rect thumb{px, 170.0f, std::min(thumb_w, pw), thumb_h};
+        const float px = 984.0f, pw = 832.0f;
+        // the season's poster on the left (it changes with the season); the episode's words beside it
+        const float aspect = it.aspect > 0.2f ? it.aspect : 1.5f;
+        const float poster_h = 330.0f;
+        const float poster_w = std::min(poster_h / aspect, 300.0f);
+        const Rect thumb{px, 170.0f, poster_w, poster_w * aspect};
         list.shadow({thumb.x, thumb.y + 14.0f, thumb.w, thumb.h}, 22.0f, 40.0f, kBlack.with_alpha(0.5f * fade));
         list.push_opacity(fade);
         list.image(it.cover, thumb, gfx::kFullUv, {1.0f, 1.0f, 1.0f, 1.0f}, 22.0f);
         list.bordered_rect(thumb, 22.0f, kClear, 1.5f, kWhite.with_alpha(0.2f));
         if (it.ready && it.watched)
-            draw_check(list, thumb.x + 44.0f, thumb.y + 44.0f, 24.0f, 1.0f);
-        if (it.ready && it.progress > 0.01f && !it.watched)
-        {
-            const Rect bar{thumb.x + 24.0f, thumb.y + thumb.h - 24.0f, thumb.w - 48.0f, 6.0f};
-            list.rounded_rect(bar, 3.0f, kBlack.with_alpha(0.5f));
-            list.rounded_rect({bar.x, bar.y, std::max(6.0f, bar.w * it.progress), 6.0f}, 3.0f, kGold);
-        }
-        float y = thumb.y + thumb.h + 62.0f;
+            draw_check(list, thumb.x + 36.0f, thumb.y + 36.0f, 22.0f, 1.0f);
+        const float tx = thumb.x + thumb.w + 36.0f;
+        const float tw = px + pw - tx;
+        float y = thumb.y + 52.0f;
         if (!it.ready)
         {
-            list.rounded_rect(Rect{px, y - 30.0f, 420.0f, 30.0f}, 15.0f, kWhite.with_alpha(0.08f));
+            list.rounded_rect(Rect{tx, y - 30.0f, 360.0f, 30.0f}, 15.0f, kWhite.with_alpha(0.08f));
             list.pop_opacity();
             return;
         }
-        ui::text(list, fonts.display, fonts.display.font->fit(it.title, 46, pw), px, y, 46, kWhite);
-        y += 44.0f;
+        ui::text(list, fonts.semibold, upper_text(list_.name).c_str(), tx, y - 8.0f, 16, kWhite.with_alpha(0.5f),
+                 gfx::Align::left, 3.0f);
+        y += 52.0f;
+        const std::vector<std::string> head = wrap_lines(fonts.display, it.title, 44.0f, tw);
+        for (std::size_t k = 0; k < head.size() && k < 2; ++k)
+        {
+            std::string line = head[k];
+            if (k == 1 && head.size() > 2)
+                line += " ...";
+            ui::text(list, fonts.display, line.c_str(), tx, y, 44, kWhite);
+            y += 50.0f;
+        }
         std::string meta = "Episode " + std::to_string(sel + 1);
         if (it.runtime[0])
             meta += std::string("  \xC2\xB7  ") + it.runtime;
         if (it.year > 0)
             meta += "  \xC2\xB7  " + std::to_string(it.year);
-        ui::text(list, fonts.regular, meta.c_str(), px, y, 24, kWhite.with_alpha(0.7f));
+        ui::text(list, fonts.regular, meta.c_str(), tx, y, 24, kWhite.with_alpha(0.7f));
+        y += 46.0f;
+        // the rating: stars and the number out of ten
+        if (it.rating > 0.0f)
+        {
+            char score[24];
+            std::snprintf(score, sizeof(score), "%.1f / 10", static_cast<double>(it.rating * 2.0f));
+            draw_stars(list, tx, y - 8.0f, it.rating, 8.0f, 20.0f, 1.0f);
+            ui::text(list, fonts.semibold, score, tx + 120.0f, y, 24, kWhite.with_alpha(0.9f));
+            y += 46.0f;
+        }
         // watched or not
-        float sx = px + fonts.regular.measure(meta.c_str(), 24) + 28.0f;
         if (it.watched)
         {
-            draw_check(list, sx + 14.0f, y - 8.0f, 14.0f, 1.0f);
-            ui::text(list, fonts.semibold, "Watched", sx + 38.0f, y, 22, Color{0.5f, 0.9f, 0.62f, 1.0f});
+            draw_check(list, tx + 14.0f, y - 8.0f, 14.0f, 1.0f);
+            ui::text(list, fonts.semibold, "Watched", tx + 38.0f, y, 22, Color{0.5f, 0.9f, 0.62f, 1.0f});
         }
         else if (it.progress > 0.01f)
-            ui::text(list, fonts.semibold, ("Left at " + clock_text(it.resumeSeconds)).c_str(), sx, y, 22, kGold);
+            ui::text(list, fonts.semibold, ("Left at " + clock_text(it.resumeSeconds)).c_str(), tx, y, 22, kGold);
         else
-            ui::text(list, fonts.semibold, "Not watched", sx, y, 22, kWhite.with_alpha(0.5f));
-        y += 46.0f;
+            ui::text(list, fonts.semibold, "Not watched", tx, y, 22, kWhite.with_alpha(0.5f));
+        if (it.progress > 0.01f && !it.watched)
+        {
+            const Rect bar{tx, y + 16.0f, std::min(tw, 300.0f), 6.0f};
+            list.rounded_rect(bar, 3.0f, kWhite.with_alpha(0.16f));
+            list.rounded_rect({bar.x, bar.y, std::max(6.0f, bar.w * it.progress), 6.0f}, 3.0f, kGold);
+        }
+        y = std::max(y + 40.0f, thumb.y + thumb.h + 56.0f);
         if (ep_wrap_gate_ != it.gateIndex)
         {
             ep_wrap_ = wrap_lines(fonts.regular, it.blurb, 26.0f, pw);
             ep_wrap_gate_ = it.gateIndex;
         }
-        const int max_lines = static_cast<int>((990.0f - y) / 36.0f);
+        const int max_lines = static_cast<int>((930.0f - y) / 36.0f);
         for (int k = 0; k < static_cast<int>(ep_wrap_.size()) && k < max_lines; ++k)
         {
             std::string line = ep_wrap_[static_cast<std::size_t>(k)];
@@ -2276,7 +2513,10 @@ class Shelf
         std::string play_value = !can ? (it.kindRaw == "Series" ? "Seasons" : it.kindRaw == "Season" ? "Episodes" : "Open") : launch_.running ? "Starting \xE2\x80\xA6"
                                  : second ? "Resume " + clock_text(it.resumeSeconds) : std::string("Play");
         const float row_y = panel.y + 196;
+        const bool series = it.kindRaw == "Series";
         float widths[4] = {second ? 262.0f : 300.0f, second ? 206.0f : 0.0f, second ? 214.0f : 322.0f, second ? 214.0f : 322.0f};
+        if (series)
+            widths[0] = 300.0f, widths[1] = 300.0f, widths[2] = widths[3] = 0.0f;
         float bx = x;
         const float gap = second ? 14.0f : 14.0f;
         for (int id = 0; id < 4; ++id)
@@ -2287,10 +2527,33 @@ class Shelf
             bx += widths[id] + gap;
             if (id <= 1 && focus_ == id && !reduced())
                 r = r.inset(-4.0f * press);
-            const char *caption = id == 0 ? (!can ? "BROWSE" : second ? "CONTINUE" : "WATCH") : id == 1 ? "RESTART" : id == 2 ? "AUDIO" : "SUBTITLES";
-            const std::string value = id == 0 ? play_value : id == 1 ? std::string("From start") : id == 2 ? audio_value : sub_value;
-            const bool enabled = id == 0 ? true : can;
+            const char *caption = id == 0 ? (series ? "SEASON" : !can ? "BROWSE" : second ? "CONTINUE" : "WATCH") : id == 1 ? (series ? "WATCH" : "RESTART") : id == 2 ? "AUDIO" : "SUBTITLES";
+            std::string value = id == 0 ? play_value : id == 1 ? std::string("From start") : id == 2 ? audio_value : sub_value;
+            if (series)
+            {
+                const JfGateSeason *chosen = season_state_ == 1 ? &seasons_[season_sel_] : nullptr;
+                if (id == 0)
+                    value = chosen ? chosen->name : season_state_ < 0 ? "No seasons" : "Loading \xE2\x80\xA6";
+                else if (chosen)
+                {
+                    char count[48];
+                    if (chosen->unplayed > 0)
+                        std::snprintf(count, sizeof(count), "%d to watch", chosen->unplayed);
+                    else
+                        std::snprintf(count, sizeof(count), "%d episode%s", chosen->episodes, chosen->episodes == 1 ? "" : "s");
+                    value = count;
+                }
+                else
+                    value = "Episodes";
+            }
+            const bool enabled = id == 0 ? true : (can || (series && id == 1));
             draw_pill(list, r, focus_ == id, enabled, caption, value, it.accent, breath);
+            if (series && id == 0)
+            {
+                // a small arrow: this opens a list
+                const Color ink = focus_ == 0 ? kInk : kWhite;
+                list.triangle({r.x + r.w - 52.0f, r.y + r.h * 0.5f - 8.0f, 18.0f, 16.0f}, ink.with_alpha(0.75f), 0.0f, 3.14159265f);
+            }
         }
 
         // The summary: it scrolls (right stick, up and down, L1 / R1), and carries the credits at its end
@@ -2339,7 +2602,7 @@ class Shelf
         constexpr float kTileGap = 16.0f;
         const float tile_w = (width - 3.0f * kTileGap) / 4.0f;
         const bool show_size = have && it.playable && det_.file_size > 0;
-        const char *labels[] = {"TYPE", show_size ? "FILE SIZE" : "LENGTH", "RATING", "WATCHED"};
+        const char *labels[] = {"TYPE", show_size ? "FILE SIZE" : series ? "SEASONS" : "LENGTH", "RATING", "WATCHED"};
         for (int i = 0; i < 4; ++i)
         {
             const float appear = tween::stagger(appear_panel, i, 0.1f, 0.6f);
@@ -2362,6 +2625,18 @@ class Shelf
                         std::snprintf(text, sizeof(text), "%.1f GB", bytes / 1.0e9);
                     else
                         std::snprintf(text, sizeof(text), "%d MB", static_cast<int>(bytes / 1.0e6 + 0.5));
+                }
+                else if (series)
+                {
+                    int real = 0;
+                    for (int k = 0; k < seasons_n_; ++k)
+                        real += seasons_[k].number > 0 ? 1 : 0;
+                    if (real == 0)
+                        real = seasons_n_;
+                    if (real > 0)
+                        std::snprintf(text, sizeof(text), "%d", real);
+                    else
+                        std::snprintf(text, sizeof(text), "-");
                 }
                 else
                     std::snprintf(text, sizeof(text), "%s", it.runtime[0] ? it.runtime : "-");
@@ -2443,11 +2718,12 @@ class Shelf
         const float x = m.x + 56.0f;
         const float width = m.w - 112.0f;
         const bool sound = modal_shown_ == Modal::audio;
-        ui::text(list, fonts.display, sound ? "Audio" : "Subtitles", x, m.y + 82.0f, 44, kWhite);
+        const bool seasons = modal_shown_ == Modal::season;
+        ui::text(list, fonts.display, seasons ? "Season" : sound ? "Audio" : "Subtitles", x, m.y + 82.0f, 44, kWhite);
         const int total = static_cast<int>(rows_.size());
         constexpr int kRows = 7;
         const int first = std::clamp(cursor_ - 3, 0, std::max(0, total - kRows));
-        const int current = sound ? effective_audio() : effective_sub();
+        const int current = seasons ? season_sel_ : sound ? effective_audio() : effective_sub();
         for (int r = 0; r < kRows && first + r < total; ++r)
         {
             const PickRow &row = rows_[static_cast<std::size_t>(first + r)];
@@ -2507,7 +2783,7 @@ class Shelf
             else
             {
                 const ui::Hint hints[] = {{ui::Button::dpad, "Choose  /  Scroll"},
-                                          {ui::Button::cross, focus_ <= 1 && item(opened_).playable ? "Play" : "Open"},
+                                          {ui::Button::cross, is_series() ? (focus_ == 0 ? "Seasons" : "Episodes") : focus_ <= 1 && item(opened_).playable ? "Play" : "Open"},
                                           {ui::Button::triangle, "Favorite"},
                                           {ui::Button::options, "Cast"},
                                           {ui::Button::circle, "Back"}};
@@ -2604,6 +2880,17 @@ class Shelf
     Modal modal_shown_ = Modal::none; // what the fading page was
     float modal_amt_ = 0.0f;
     int focus_ = 0; // 0 play, 1 from start, 2 audio, 3 subtitles, 4 summary, 5 QR
+    JfGateSeason seasons_[JF_GATE_SEASONS] = {};
+    int seasons_n_ = 0;
+    int season_state_ = 0; // 0 asked, 1 here, -1 none
+    int season_sel_ = 0;
+    int season_before_ = 0;
+    mutable std::uint32_t shown_season_tex_ = 0;
+    mutable int shown_season_gate_ = -1;
+    bool inherit_ = false;      // loading, and showing the colours of the wheel it came from
+    bool palette_real_ = true;  // the palette is from the centre cover's own colours
+    bool hold_open_ = false; // the page stays open while the show's episodes are looked at
+    float season_wait_ = 0.0f;
     JfGateDetails det_{};
     int det_state_ = 0; // 0 asked, 1 here, -1 the server did not answer
     float det_wait_ = 0.0f;
@@ -2620,6 +2907,7 @@ class Shelf
     mutable std::vector<std::string> wrap_lines_;
     mutable std::vector<std::string> ep_wrap_; // the chosen episode's summary, wrapped
     mutable int ep_wrap_gate_ = -1;
+    bool ep_backdrop_ = false; // this wheel asked for the series' picture behind its episode list
     bool ep_placed_ = false; // the episode list has found where you were up to
     int ep_top_ = 0;         // the first of the seven rows on show
     mutable float ep_top_f_ = 0.0f; // ... as it scrolls
@@ -3350,7 +3638,9 @@ class CoverFlow final : public app::Concept
             // a series, season or collection was opened: its children are on the browse wheel
             const int index = ::jf::browseRequest();
             ::jf::browseRequest() = -1;
-            const int category = ::jf_gate_browse_open(index);
+            const int season = ::jf::browseSeason();
+            ::jf::browseSeason() = -1;
+            const int category = season >= 0 ? ::jf_gate_season_open(index, season) : ::jf_gate_browse_open(index);
             if (category >= 0 && category < static_cast<int>(shelves_.size()))
             {
                 if (!is_browse())
@@ -3434,7 +3724,9 @@ class CoverFlow final : public app::Concept
             if (slide_ >= 1.0f)
                 leaving_ = -1;
         }
-        tab_pos_.target = static_cast<float>(disc_ ? tab_count() : active_);
+        // a series, season or collection has no tab of its own: the one it was opened from stays lit
+        tab_pos_.target = static_cast<float>(
+            disc_ ? tab_count() : is_browse() ? std::min(before_browse_, std::max(0, tab_count() - 1)) : active_);
         tab_pos_.update(dt, 14.0f);
         tabs_amount_.target = tabs_focus_ ? 1.0f : 0.0f;
         tabs_amount_.update(dt, 16.0f);

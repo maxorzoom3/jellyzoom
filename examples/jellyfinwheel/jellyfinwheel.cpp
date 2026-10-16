@@ -26,6 +26,7 @@
 #include "jf_setup.hpp"
 #include "jf_profile.hpp"
 #include "jf_seerr.hpp"
+#include "jf_brand.hpp"
 
 // The design on screen: this title's own, in kit/screen.cpp
 std::unique_ptr<hui::app::Concept> makeScreen(hui::app::Context &context)
@@ -252,6 +253,8 @@ public:
 	jfseerr::Screen seerr;
 	bool seerrBound{ false };
 	hui::gfx::DrawList profileList;
+	jfbrand::Logo brand;           // the Mortalfin logo: the splash at the start, then the corner
+	hui::gfx::DrawList brandList;
 	int pendingAccount{ 0 };
 	int avatarTick{ 0 };
 	double fpsSeconds{ 0.0 };
@@ -374,6 +377,7 @@ public:
 			}
 			placeholderTex = kit.renderer.create_texture(w, h, pixels.data());
 		}
+		brand.init([this](int w, int h, const unsigned char *rgba) -> std::uint32_t { return kit.renderer.create_texture(w, h, rgba); });
 		controls.style.theme = filmTheme();
 		controls.style.layout = hui::ui::MediaLayout::compact; // Stage 20: one low row; the poster is drawn beside it
 		controls.style.panel = false;
@@ -830,6 +834,73 @@ public:
 		evictPosters(dt);
 		jf_gate_want(jf::view().category, jf::view().centre);
 		backdropUpdate(dt);
+		seasonUpdate();
+		logoUpdate();
+	}
+
+	// ---- Stage 60: a season's poster on a show's page, and the show's logo on its episode page ----
+	std::vector<long long> seasonOrder;
+	int seasonAsked{ -1 }, seasonAskedFor{ -1 };
+	int logoWanted{ -2 };
+
+	void seasonUpdate()
+	{
+		const jf::SeasonWant &want = jf::seasonWant();
+		if (want.gate >= 0 && (want.gate != seasonAsked || want.season != seasonAskedFor)) {
+			seasonAsked = want.gate;
+			seasonAskedFor = want.season;
+			if (!jf::seasonCovers().count(jf::seasonKey(want.gate, want.season))) {
+				jf_gate_season_poster_want(want.gate, want.season);
+			}
+		}
+		JfGatePoster poster;
+		while (jf_gate_season_poster_take(&poster)) {
+			const long long key = jf::seasonKey(poster.category, poster.position);
+			auto &covers = jf::seasonCovers();
+			auto old = covers.find(key);
+			if (old != covers.end() && old->second.tex) {
+				retired.push_back(old->second.tex);
+			}
+			jf::SeasonCover cover;
+			cover.tex = kit.renderer.create_texture(poster.width, poster.height, poster.rgba);
+			cover.w = poster.width;
+			cover.h = poster.height;
+			covers[key] = cover;
+			seasonOrder.push_back(key);
+			std::free(poster.rgba);
+			while (seasonOrder.size() > 60) {
+				const long long drop = seasonOrder.front();
+				seasonOrder.erase(seasonOrder.begin());
+				auto found = covers.find(drop);
+				if (found != covers.end()) {
+					if (found->second.tex) {
+						retired.push_back(found->second.tex);
+					}
+					covers.erase(found);
+				}
+			}
+		}
+	}
+
+	void logoUpdate()
+	{
+		jf::LogoInfo &info = jf::logoInfo();
+		if (playingItem >= 0) {
+			info.gate = -1; // the player has the logo for now
+			return;
+		}
+		const int want = jf::logoWant();
+		if (want != logoWanted) {
+			logoWanted = want;
+			jf_logo_want(want);
+			dropLogo();
+		}
+		takeLogo();
+		info.gate = logoWanted;
+		info.tex = logoTex;
+		info.w = logoW;
+		info.h = logoH;
+		info.state = jf_logo_state();
 	}
 
 	// ---- Stage 14: the backdrop behind a title's page ----
@@ -961,7 +1032,7 @@ public:
 		if (failed) {
 			std::snprintf(message, sizeof(message), "Could not load your library");
 		} else {
-			std::snprintf(message, sizeof(message), "Loading your library  %zu", covers);
+			message[0] = 0; // nothing is written while it loads: the logo and the covers say it
 		}
 		loadingList.clear();
 		const int authNow = jf_gate_auth_state();
@@ -970,14 +1041,18 @@ public:
 			signIn.update(kit.input(), dt, feedback);
 			signIn.draw(loadingList, kit.fonts);
 		} else {
-			hui::ui::text(loadingList, kit.fonts.display, message, 960.0f, 540.0f, 52,
-				hui::gfx::Color{ 1.0f, 1.0f, 1.0f, failed ? 1.0f : 0.55f + 0.35f * std::sin(loadingClock * 3.0f) },
-				hui::gfx::Align::center);
+			if (message[0]) {
+				hui::ui::text(loadingList, kit.fonts.display, message, 960.0f, 540.0f, 52,
+					hui::gfx::Color{ 1.0f, 1.0f, 1.0f, 1.0f }, hui::gfx::Align::center);
+			}
 		}
 		leavingList.clear();
 		leaving.draw(leavingList, kit.fonts, ps5ui::active_theme());
+		brandList.clear();
+		brand.draw(brandList);
 		kit.renderer.begin();
 		kit.renderer.draw(loadingList);
+		kit.renderer.draw(brandList);
 		kit.renderer.draw(leavingList);
 		buildKitCommandBuffer();
 		submitFrame();
@@ -1317,6 +1392,7 @@ public:
 		playingItem = -1;
 		jf_logo_want(-1);
 		dropLogo();
+		logoWanted = -2;
 		dropPics();
 		panel = Panel::none;
 		jf_gate_pause(0);
@@ -2648,6 +2724,9 @@ public:
 		profileList.clear();
 		profileMenu.draw(profileList, kit.fonts);
 		kit.renderer.draw(profileList);
+		brandList.clear();
+		brand.draw(brandList);
+		kit.renderer.draw(brandList);
 		kit.renderer.backdrop(frame.post);
 		leavingList.clear();
 		leaving.draw(leavingList, kit.fonts, ps5ui::active_theme());
@@ -2679,6 +2758,12 @@ public:
 				}
 			}
 		}
+		for (auto &entry : jf::seasonCovers()) {
+			if (entry.second.tex) {
+				kit.renderer.destroy_texture(entry.second.tex);
+			}
+		}
+		jf::seasonCovers().clear();
 		if (::jf::profileTexture()) {
 			kit.renderer.destroy_texture(::jf::profileTexture());
 			::jf::profileTexture() = 0;
@@ -2686,6 +2771,10 @@ public:
 		flushRetired(true);
 		if (placeholderTex) {
 			kit.renderer.destroy_texture(placeholderTex);
+		}
+		if (brand.texture()) {
+			kit.renderer.destroy_texture(brand.texture());
+			brand.forget();
 		}
 		if (videoTex) {
 			kit.renderer.destroy_texture(videoTex);

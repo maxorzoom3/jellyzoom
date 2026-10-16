@@ -29,6 +29,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -136,6 +137,26 @@ struct DetailsRecord {
 std::map<std::string, DetailsRecord> detailsCache;
 std::deque<std::string> detailsOrder; // oldest first, for trimming
 std::deque<std::string> detailsJobs;
+
+// a series' seasons (see jf_gate_seasons_request)
+struct SeasonInfo {
+	std::string id, name;
+	int number{ 0 }, episodes{ 0 }, unplayed{ 0 };
+};
+struct SeasonRecord {
+	int state{ 0 }; // 0 asked, 1 here, 2 failed
+	std::vector<SeasonInfo> seasons;
+};
+std::map<std::string, SeasonRecord> seasonCache; // by series id
+std::deque<std::string> seasonJobs;
+struct SeasonPosterJob {
+	bool have{ false };
+	std::string id;
+	int gate{ -1 }, season{ -1 };
+};
+std::deque<SeasonPosterJob> seasonPosterJobs; // the one wanted now first, then the show's other seasons
+std::set<std::string> seasonPosterQueued;    // season ids already queued or fetched
+std::deque<JfGatePoster> seasonPosterReady;
 
 // the episode after the one that played (see jf_gate_next_request), and the titles browsed into
 struct NextJob {
@@ -465,7 +486,12 @@ void parseEntry(Entry &e, json_object *o, int kind)
 			}
 		}
 		const std::string seriesId = e.seriesId;
-		if (!seriesId.empty() && !seriesTag.empty()) {
+		const std::string seasonId = jstr(o, "SeasonId");
+		if (kind == kBrowse && !seasonId.empty()) {
+			// inside a season: its own poster (the server does not mind the tag, it only keeps copies by it)
+			e.imageId = seasonId;
+			e.imageTag = "season";
+		} else if (!seriesId.empty() && !seriesTag.empty()) {
 			e.imageId = seriesId;
 			e.imageTag = seriesTag;
 		}
@@ -1035,6 +1061,81 @@ int probeTotal(const JfSession &session, int kind)
 	const int n = static_cast<int>(jint(root, "TotalRecordCount"));
 	json_object_put(root);
 	return n;
+}
+
+// A series' seasons, in order, into seasonCache
+void fetchSeasons(const JfSession &session, const std::string &seriesId)
+{
+	char path[600];
+	std::snprintf(path, sizeof(path), "/Shows/%s/Seasons?UserId=%s&Fields=ChildCount", seriesId.c_str(), session.user_id);
+	json_object *root = getJson(session, path);
+	json_object *array = root ? jget(root, "Items") : nullptr;
+	SeasonRecord record;
+	if (array && json_object_is_type(array, json_type_array)) {
+		const int count = static_cast<int>(json_object_array_length(array));
+		for (int i = 0; i < count && i < JF_GATE_SEASONS; i++) {
+			json_object *o = json_object_array_get_idx(array, static_cast<size_t>(i));
+			SeasonInfo s;
+			s.id = jstr(o, "Id");
+			s.name = jstr(o, "Name");
+			s.number = static_cast<int>(jint(o, "IndexNumber"));
+			s.episodes = static_cast<int>(jint(o, "ChildCount"));
+			s.unplayed = static_cast<int>(jint(jget(o, "UserData"), "UnplayedItemCount"));
+			if (!s.id.empty()) {
+				record.seasons.push_back(s);
+			}
+		}
+		record.state = 1;
+	} else {
+		record.state = 2;
+	}
+	if (root) {
+		json_object_put(root);
+	}
+	std::lock_guard<std::mutex> guard(lock);
+	seasonCache[seriesId] = record;
+	say("JFGATE: %d seasons for %s", static_cast<int>(record.seasons.size()), seriesId.c_str());
+}
+
+// One season's poster, decoded, into seasonPosterReady
+void fetchSeasonPoster(const JfSession &session, const SeasonPosterJob &job)
+{
+	char auth[4096];
+	authorization(session, auth, sizeof(auth));
+	char path[400];
+	std::snprintf(path, sizeof(path), "/Items/%s/Images/Primary?maxWidth=500&maxHeight=750&quality=85&format=Jpg", job.id.c_str());
+	HttpBinaryResponse response;
+	std::memset(&response, 0, sizeof(response));
+	if (http_get_binary(jfconf::host(), jfconf::port(), path, auth, &response) != 0) {
+		return;
+	}
+	if (response.status != 200 || !response.data || response.size == 0) {
+		http_binary_response_free(&response);
+		return;
+	}
+	int w = 0, h = 0, channels = 0;
+	unsigned char *pixels = stbi_load_from_memory(response.data, static_cast<int>(response.size), &w, &h, &channels, 4);
+	http_binary_response_free(&response);
+	if (!pixels) {
+		return;
+	}
+	JfGatePoster poster;
+	std::memset(&poster, 0, sizeof(poster));
+	poster.category = job.gate;
+	poster.position = job.season;
+	poster.width = w;
+	poster.height = h;
+	poster.rgba = static_cast<unsigned char *>(std::malloc(static_cast<size_t>(w) * static_cast<size_t>(h) * 4));
+	if (poster.rgba) {
+		std::memcpy(poster.rgba, pixels, static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+		std::lock_guard<std::mutex> guard(lock);
+		seasonPosterReady.push_back(poster);
+		while (seasonPosterReady.size() > 4) {
+			std::free(seasonPosterReady.front().rgba);
+			seasonPosterReady.pop_front();
+		}
+	}
+	stbi_image_free(pixels);
 }
 
 // The episode after `job.episodeId`, from the series' own list of episodes: it becomes the one title of the queue category
@@ -1670,7 +1771,8 @@ void run()
 		// what the player and the screen are waiting for comes first, even while a film plays
 		FavouriteJob job;
 		bool haveJob = false;
-		std::string detailsId;
+		std::string detailsId, seasonsId;
+		SeasonPosterJob posterJob;
 		NextJob nextJob;
 		bool haveNext = false;
 		{
@@ -1682,6 +1784,12 @@ void run()
 			} else if (!detailsJobs.empty()) {
 				detailsId = detailsJobs.front();
 				detailsJobs.pop_front();
+			} else if (!seasonJobs.empty()) {
+				seasonsId = seasonJobs.front();
+				seasonJobs.pop_front();
+			} else if (!seasonPosterJobs.empty()) {
+				posterJob = seasonPosterJobs.front();
+				seasonPosterJobs.pop_front();
 			} else if (!nextJobs.empty()) {
 				nextJob = nextJobs.front();
 				nextJobs.pop_front();
@@ -1694,6 +1802,14 @@ void run()
 		}
 		if (!detailsId.empty()) {
 			fetchDetails(session, detailsId);
+			continue;
+		}
+		if (!seasonsId.empty()) {
+			fetchSeasons(session, seasonsId);
+			continue;
+		}
+		if (posterJob.have) {
+			fetchSeasonPoster(session, posterJob);
 			continue;
 		}
 		if (haveNext) {
@@ -2119,6 +2235,10 @@ extern "C" int jf_gate_signout(int forget_server)
 		detailsCache.clear();
 		detailsOrder.clear();
 		detailsJobs.clear();
+		seasonCache.clear();
+		seasonJobs.clear();
+		seasonPosterJobs.clear();
+		seasonPosterQueued.clear();
 		nextJobs.clear();
 		browseStack.clear();
 		if (avatarWaiting) {
@@ -2197,6 +2317,20 @@ extern "C" int jf_gate_auth_busy(void)
 
 extern "C" void jf_gate_auth_text(int which, char *out, int size)
 {
+	if (which == 4) {
+		// the page on the server where a person approves a Quick Connect code (for a QR code on the sign-in page)
+		std::string base = jfconf::serverText();
+		if (base.empty()) {
+			copyOut(std::string(), out, size);
+			return;
+		}
+		if (base.rfind("http://", 0) != 0 && base.rfind("https://", 0) != 0) {
+			const size_t slash = base.find('/');
+			base = slash != std::string::npos ? "http://" + base.substr(slash + 1) : "http://" + base;
+		}
+		copyOut(base + "/web/#/quickconnect", out, size);
+		return;
+	}
 	std::lock_guard<std::mutex> g(authLock);
 	copyOut(which == 0 ? authMessage : which == 1 ? serverName : which == 2 ? profileName : quickCode, out, size);
 }
@@ -2348,6 +2482,140 @@ extern "C" int jf_gate_browse_open(int gateIndex)
 	step.id = e.id;
 	step.type = e.kind;
 	step.name = e.parentName.empty() ? e.name : e.parentName + ": " + e.name;
+	browseStack.push_back(step);
+	browseConfigure();
+	return browseCat;
+}
+
+extern "C" int jf_gate_seasons_request(int gateIndex)
+{
+	int cat, pos;
+	if (!locate(gateIndex, &cat, &pos)) {
+		return -1;
+	}
+	std::lock_guard<std::mutex> guard(lock);
+	const Category &c = *cats[static_cast<size_t>(cat)];
+	if (c.total < 0 || static_cast<size_t>(pos) >= c.entries.size() || c.entries[static_cast<size_t>(pos)].id.empty()) {
+		return 0;
+	}
+	const std::string id = c.entries[static_cast<size_t>(pos)].id;
+	auto found = seasonCache.find(id);
+	if (found != seasonCache.end()) {
+		return found->second.state == 1 ? 1 : found->second.state == 2 ? -1 : 0;
+	}
+	seasonCache[id] = SeasonRecord();
+	seasonJobs.push_back(id);
+	return 0;
+}
+
+extern "C" int jf_gate_seasons_get(int gateIndex, JfGateSeason *out, int max)
+{
+	int cat, pos;
+	if (!locate(gateIndex, &cat, &pos)) {
+		return 0;
+	}
+	std::lock_guard<std::mutex> guard(lock);
+	const Category &c = *cats[static_cast<size_t>(cat)];
+	if (c.total < 0 || static_cast<size_t>(pos) >= c.entries.size()) {
+		return 0;
+	}
+	auto found = seasonCache.find(c.entries[static_cast<size_t>(pos)].id);
+	if (found == seasonCache.end() || found->second.state != 1) {
+		return 0;
+	}
+	int n = 0;
+	for (const SeasonInfo &s : found->second.seasons) {
+		if (n >= max) {
+			break;
+		}
+		std::memset(&out[n], 0, sizeof(out[n]));
+		std::snprintf(out[n].name, sizeof(out[n].name), "%s", s.name.c_str());
+		out[n].number = s.number;
+		out[n].episodes = s.episodes;
+		out[n].unplayed = s.unplayed;
+		n++;
+	}
+	return n;
+}
+
+extern "C" void jf_gate_season_poster_want(int gateIndex, int season)
+{
+	int cat, pos;
+	if (!locate(gateIndex, &cat, &pos)) {
+		return;
+	}
+	std::lock_guard<std::mutex> guard(lock);
+	const Category &c = *cats[static_cast<size_t>(cat)];
+	if (c.total < 0 || static_cast<size_t>(pos) >= c.entries.size()) {
+		return;
+	}
+	auto found = seasonCache.find(c.entries[static_cast<size_t>(pos)].id);
+	if (found == seasonCache.end() || found->second.state != 1 || season < 0 ||
+		static_cast<size_t>(season) >= found->second.seasons.size()) {
+		return;
+	}
+	// the wanted season goes first; the show's other seasons follow, so scrolling through them is smooth
+	const std::vector<SeasonInfo> &all = found->second.seasons;
+	const std::string &wantedId = all[static_cast<size_t>(season)].id;
+	for (auto it = seasonPosterJobs.begin(); it != seasonPosterJobs.end(); ++it) {
+		if (it->id == wantedId) {
+			SeasonPosterJob moved = *it;
+			seasonPosterJobs.erase(it);
+			seasonPosterJobs.push_front(moved);
+			break;
+		}
+	}
+	for (size_t i = 0; i < all.size(); i++) {
+		if (seasonPosterQueued.count(all[i].id)) {
+			continue;
+		}
+		seasonPosterQueued.insert(all[i].id);
+		SeasonPosterJob job;
+		job.have = true;
+		job.id = all[i].id;
+		job.gate = gateIndex;
+		job.season = static_cast<int>(i);
+		if (static_cast<int>(i) == season) {
+			seasonPosterJobs.push_front(job);
+		} else {
+			seasonPosterJobs.push_back(job);
+		}
+	}
+}
+
+extern "C" int jf_gate_season_poster_take(JfGatePoster *out)
+{
+	std::lock_guard<std::mutex> guard(lock);
+	if (seasonPosterReady.empty()) {
+		return 0;
+	}
+	*out = seasonPosterReady.front();
+	seasonPosterReady.pop_front();
+	return 1;
+}
+
+extern "C" int jf_gate_season_open(int gateIndex, int season)
+{
+	int cat, pos;
+	if (!locate(gateIndex, &cat, &pos) || browseCat < 0) {
+		return -1;
+	}
+	std::lock_guard<std::mutex> guard(lock);
+	const Category &src = *cats[static_cast<size_t>(cat)];
+	if (src.total < 0 || static_cast<size_t>(pos) >= src.entries.size()) {
+		return -1;
+	}
+	const Entry &e = src.entries[static_cast<size_t>(pos)];
+	auto found = seasonCache.find(e.id);
+	if (found == seasonCache.end() || found->second.state != 1 || season < 0 ||
+		static_cast<size_t>(season) >= found->second.seasons.size()) {
+		return -1;
+	}
+	const SeasonInfo &s = found->second.seasons[static_cast<size_t>(season)];
+	BrowseStep step;
+	step.id = s.id;
+	step.type = "Season";
+	step.name = e.name + ": " + s.name;
 	browseStack.push_back(step);
 	browseConfigure();
 	return browseCat;

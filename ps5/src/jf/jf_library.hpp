@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <map>
 #include <vector>
 
 #include "gfx/draw_list.hpp"
@@ -256,6 +257,52 @@ inline int &browseRequest()
 {
     static int index = -1;
     return index;
+}
+// With browseRequest: open this season (a position in the series' season list) instead of the series' own list; -1 for none
+inline int &browseSeason()
+{
+    static int season = -1;
+    return season;
+}
+// Stage 60: the season poster shown on a series' page (the design says which one it wants, the program fetches and keeps them)
+struct SeasonWant
+{
+    int gate = -1;
+    int season = -1;
+};
+inline SeasonWant &seasonWant()
+{
+    static SeasonWant want;
+    return want;
+}
+struct SeasonCover
+{
+    std::uint32_t tex = 0;
+    int w = 0, h = 0;
+};
+inline long long seasonKey(int gate, int season) { return static_cast<long long>(gate) * 64 + season; }
+inline std::map<long long, SeasonCover> &seasonCovers()
+{
+    static std::map<long long, SeasonCover> covers;
+    return covers;
+}
+// The logo of the series whose episodes are listed: the design says whose (a gate index), the program fetches it
+inline int &logoWant()
+{
+    static int gate = -1;
+    return gate;
+}
+struct LogoInfo
+{
+    std::uint32_t tex = 0;
+    int w = 0, h = 0;
+    int gate = -1;  // the title the picture is for
+    int state = 0;  // 0 nothing asked, 1 loading, 2 here, -1 the title has no logo
+};
+inline LogoInfo &logoInfo()
+{
+    static LogoInfo info;
+    return info;
 }
 // 0..1: how much of a title's backdrop picture the program is showing behind its page (the floor lets it through)
 inline float &backdropShown()
