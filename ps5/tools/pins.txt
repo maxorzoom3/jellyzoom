@@ -1,0 +1,5 @@
+# name value: dav1d tarball sha256, and the commit of each sibling checkout. Written by ps5/tools/pin-deps.sh
+dav1d-1.5.1 fa635e2bdb25147b1384007c83e15de44c589582bb3b9a53fc1579cb9d74b695
+PS5_Vulkan fde9e3798c2ec1d8fccc90d5067cd6060490607f
+PS5_Mesa 7b59ef27c1b09b9671bc4153c41940c3155c3af2
+PS5_PayloadSDK b5efad528e0ac1b8289f39d72a0e890ff68ff0a6
