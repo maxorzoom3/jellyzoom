@@ -38,6 +38,15 @@ mkdir -p "$work" "$prefix"
 cd "$work"
 if [ ! -d "dav1d-$VER" ]; then
     curl -fL "https://code.videolan.org/videolan/dav1d/-/archive/$VER/dav1d-$VER.tar.gz" -o "dav1d-$VER.tar.gz"
+    # the download must be the one pinned in ps5/tools/pins.txt (ps5/tools/pin-deps.sh writes it)
+    want=$(awk -v k="dav1d-$VER" '$1 == k { print $2 }' "$proj/ps5/tools/pins.txt" 2>/dev/null || true)
+    got=$(sha256sum "dav1d-$VER.tar.gz" | cut -d' ' -f1)
+    if [ -n "$want" ] && [ "$got" != "$want" ]; then
+        echo "dav1d-$VER.tar.gz does not match its pin in ps5/tools/pins.txt: removed, nothing built"
+        rm -f "dav1d-$VER.tar.gz"
+        exit 1
+    fi
+    [ -n "$want" ] || echo "warning: dav1d-$VER is not pinned (sha256 $got): run ps5/tools/pin-deps.sh"
     tar xf "dav1d-$VER.tar.gz"
 fi
 

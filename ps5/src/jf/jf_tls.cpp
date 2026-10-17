@@ -1022,6 +1022,11 @@ extern "C" int jf_tls_open(const char *name, int port, int tls, int *local_port)
 	return 0;
 }
 
+extern "C" int jf_tls_insecure(void)
+{
+	return fileExists(std::string(JF_TLS_DATA) + "/jf-tls-insecure") ? 1 : 0;
+}
+
 extern "C" void jf_tls_error(char *buf, int size)
 {
 	if (!buf || size <= 0) {

@@ -65,13 +65,22 @@ clang_major=$(clang --version 2> /dev/null | sed -n 's/.*clang version \([0-9]*\
 step "the projects beside this one"
 for pair in "PS5_Vulkan $vulkan" "PS5_Mesa $mesa" "PS5_PayloadSDK $sdk_fork"; do
     read -r name path <<< "$pair"
+    pin=$(awk -v k="$name" '$1 == k { print $2 }' "$ps5/tools/pins.txt" 2> /dev/null || true)
     if [[ -d $path/.git ]]; then
         ok "$name ($path, $(git -C "$path" rev-parse --short HEAD))"
+        if [[ -n $pin && $(git -C "$path" rev-parse HEAD) != "$pin" ]]; then
+            echo "  note    $name is not at the commit pinned in ps5/tools/pins.txt (${pin:0:9}); update the pin with ps5/tools/pin-deps.sh once you have checked the change"
+        fi
     elif $check; then
         todo "$name: git clone https://github.com/mihawk-99/$name.git $path"
     else
         echo "  cloning $name into $path"
         git clone -q "https://github.com/mihawk-99/$name.git" "$path"
+        if [[ -n $pin ]]; then
+            git -C "$path" checkout -q "$pin" || todo "$name: the pinned commit ${pin:0:9} could not be checked out"
+        else
+            echo "  note    $name is not pinned: run ps5/tools/pin-deps.sh"
+        fi
         ok "$name"
     fi
 done

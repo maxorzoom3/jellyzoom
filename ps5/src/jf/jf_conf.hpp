@@ -1,7 +1,8 @@
 // Runtime server and login settings. Files in /data win; config.h values are the fallback.
 //   /data/jf-server   "host" or "host:port"
 //   /data/jf-user     user name
-//   /data/jf-pass     password
+//   /data/jf-pass     password (optional, only if you put it there yourself: the program never writes it, and keeps only
+//                     the sign-in token in /data/jf-token. A plain-text password is best deleted once you are signed in)
 #pragma once
 #include <cstdio>
 #include <cstdlib>
@@ -234,7 +235,7 @@ inline bool save(const std::string &host, int port, const std::string &user, con
 	v.pass = pass;
 	bool ok = writeFile("/data/jf-server", serverTextOf(host, port));
 	ok = writeFile("/data/jf-user", user) && ok;
-	ok = writeFile("/data/jf-pass", pass) && ok;
+	// the password is never written: the sign-in token (jf-token) is what is kept
 	return ok;
 }
 } // namespace jfconf

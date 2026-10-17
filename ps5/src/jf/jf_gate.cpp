@@ -2310,6 +2310,11 @@ extern "C" int jf_gate_auth_state(void)
 	return authState.load();
 }
 
+extern "C" int jf_gate_tls_insecure(void)
+{
+	return jf_tls_insecure();
+}
+
 extern "C" int jf_gate_auth_busy(void)
 {
 	return probing.load();

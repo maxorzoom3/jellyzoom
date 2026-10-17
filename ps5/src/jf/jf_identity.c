@@ -32,7 +32,7 @@ const char *jf_device_id(void)
 			if (fgets(buf, sizeof(buf), f)) {
 				buf[strcspn(buf, "\r\n")] = 0;
 				if (valid(buf)) {
-					strcpy(id, buf);
+					snprintf(id, sizeof(id), "%s", buf);
 				}
 			}
 			fclose(f);

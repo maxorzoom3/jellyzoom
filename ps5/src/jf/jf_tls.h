@@ -6,6 +6,8 @@ extern "C" {
 #endif
 /* Opens (or finds) the tunnel to name:port. tls 1 for https. Returns 0 and the local port, or -1. */
 int jf_tls_open(const char *name, int port, int tls, int *local_port);
+/* 1 when /data/jf-tls-insecure exists: the certificate check is OFF (for a self-signed server), 0 when it is on. */
+int jf_tls_insecure(void);
 /* The last thing that went wrong in a tunnel, in words ("" if nothing did). */
 void jf_tls_error(char *buf, int size);
 #ifdef __cplusplus

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Security: the sign-in page warns when the server is plain http or the certificate check is off; the program never stores your password (only the sign-in token); the build checks the dav1d download and the PS5_Vulkan / PS5_Mesa / PS5_PayloadSDK checkouts against pins (ps5/tools/pin-deps.sh).
 ## 1.0.0-beta.5 (2026-10-16)
 
 ### TV shows and collections

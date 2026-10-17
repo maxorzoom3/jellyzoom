@@ -110,6 +110,15 @@ class Screen
 		if (!message_.empty()) {
 			hui::ui::text(list, fonts.regular, message_.c_str(), 960.0f, 320.0f, 30, Color{ 1.0f, 0.55f, 0.5f, 1.0f }, Align::center);
 		}
+		if (!keyboardOpen_ && (certOff_ || (plain_ && page_ == Page::signin))) {
+			const Color amber{ 1.0f, 0.78f, 0.35f, 0.9f };
+			if (certOff_) {
+				hui::ui::text(list, fonts.regular, "Certificate check is OFF (/data/jf-tls-insecure): https servers are not verified.", 960.0f, 1010.0f, 24, amber, Align::center);
+			}
+			if (plain_ && page_ == Page::signin) {
+				hui::ui::text(list, fonts.regular, "This server is not encrypted (http): a password is sent as plain text. Quick Connect or https is safer.", 960.0f, certOff_ ? 1044.0f : 1020.0f, 24, amber, Align::center);
+			}
+		}
 		if (busy_ || waiting_) {
 			const float a = 0.55f + 0.35f * std::sin(clock_ * 3.0f);
 			hui::ui::text(list, fonts.display, "One moment ...", 960.0f, 600.0f, 48, white.with_alpha(a), Align::center);
@@ -145,6 +154,7 @@ class Screen
 	mutable std::string qrText_;
 	mutable jfqr::Code qrCode_;
 	int quickState_{ 0 };
+	bool plain_{ false }, certOff_{ false }; // the server is reached without encryption / the certificate check is off
 	int searching_{ 0 };
 	size_t foundCount_{ 0 };
 
@@ -171,6 +181,8 @@ class Screen
 		quickCode_ = buf;
 		jf_gate_auth_text(4, buf, sizeof(buf));
 		quickUrl_ = buf;
+		plain_ = quickUrl_.rfind("http://", 0) == 0;
+		certOff_ = jf_gate_tls_insecure() != 0;
 		quickState_ = jf_gate_auth_quick_state();
 		searching_ = jf_gate_auth_discover_state();
 		if (started_ && page_ == Page::servers && !keyboardOpen_) {
