@@ -6,7 +6,7 @@
 # 1. the version (the file VERSION) is written into param.json; the tree must then be committed
 # 2. a release build (no server, login or device id of yours in it)
 # 3. the security check of the source, git history and the built title
-# 4. the zip (dist/release-<version>/Mortalfin-<version>.zip) and the source of every part
+# 4. the zip (dist/release-<version>/Jellyzoom-<version>.zip) and the source of every part
 # 5. the security check of the zip itself, and the Homebrew Store record for it
 #
 # Nothing is published by this script: it only prepares the files. See docs/RELEASING.md for GitHub.
@@ -25,7 +25,7 @@ fi
 ps5/tools/build-release.sh
 python3 ps5/tools/security-check.py --build
 python3 ps5/tools/package-release.py "$version"
-zip="dist/release-$version/Mortalfin-$version.zip"
+zip="dist/release-$version/Jellyzoom-$version.zip"
 python3 ps5/tools/security-check.py --zip "$zip"
 python3 ps5/tools/catalog-record.py "$version" "$@"
 echo

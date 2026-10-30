@@ -615,8 +615,8 @@ bool Decoder::active() const
 bool Decoder::open(const AVCodecContext *ctx)
 {
 	Impl &d = *impl_;
-	if (access("/data/jf-hw-off", F_OK) == 0) {
-		say("HWDEC: switched off (/data/jf-hw-off)");
+	if (access("/data/jellyzoom-hw-off", F_OK) == 0) {
+		say("HWDEC: switched off (/data/jellyzoom-hw-off)");
 		return false;
 	}
 	if (!ctx || ctx->width <= 0 || ctx->height <= 0) {

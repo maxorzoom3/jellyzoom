@@ -1,5 +1,5 @@
 /* The device id a release build reports to a Jellyfin server: 32 hex digits made on the console the first
- * time they are needed and kept in /data/jf-device-id, so each install is one device of its own. */
+ * time they are needed and kept in /data/jellyzoom-device-id, so each install is one device of its own. */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <string.h>
@@ -26,7 +26,7 @@ const char *jf_device_id(void)
 {
 	pthread_mutex_lock(&lock);
 	if (!id[0]) {
-		FILE *f = fopen("/data/jf-device-id", "r");
+		FILE *f = fopen("/data/jellyzoom-device-id", "r");
 		if (f) {
 			char buf[64] = { 0 };
 			if (fgets(buf, sizeof(buf), f)) {
@@ -57,7 +57,7 @@ const char *jf_device_id(void)
 			for (int i = 0; i < 16; i++) {
 				snprintf(id + i * 2, 3, "%02x", raw[i]);
 			}
-			FILE *w = fopen("/data/jf-device-id", "w");
+			FILE *w = fopen("/data/jellyzoom-device-id", "w");
 			if (w) {
 				fputs(id, w);
 				fclose(w);

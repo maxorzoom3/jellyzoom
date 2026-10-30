@@ -588,13 +588,13 @@ void Impl::compose(VkCommandBuffer cmd, VkFramebuffer framebuffer, const jfhp::L
 	push.rect[3] = std::max(look.h, 1e-4f);
 	push.frame[0] = static_cast<float>(look.frameW);
 	push.frame[1] = static_cast<float>(look.frameH);
-	// /data/jf-hdr-gain: a number, the film's brightness in percent (25..400, 100 = as mastered)
+	// /data/jellyzoom-hdr-gain: a number, the film's brightness in percent (25..400, 100 = as mastered)
 	static float gain = 1.0f;
 	static int countdown = 0;
 	if (countdown-- <= 0) {
 		countdown = 120;
 		float g = 1.0f;
-		if (FILE *f = std::fopen("/data/jf-hdr-gain", "r")) {
+		if (FILE *f = std::fopen("/data/jellyzoom-hdr-gain", "r")) {
 			int n = 0;
 			if (std::fscanf(f, "%d", &n) == 1 && n >= 25 && n <= 400) {
 				g = static_cast<float>(n) / 100.0f;

@@ -1,10 +1,10 @@
 // Tunnel for names and https. See jf_tls.h. The rest of the program talks plain http to 127.0.0.1; the tunnel finds the
 // address of the name and, for https, does the TLS (mbedTLS: TLS 1.2, the server's certificate and name are checked).
-//   /data/jf-dns        a DNS server to ask (an address). When it is there, no other server is asked: your DNS decides.
+//   /data/jellyzoom-dns        a DNS server to ask (an address). When it is there, no other server is asked: your DNS decides.
 //                       Without it: the router (192.168.1.1), then 1.1.1.1 and 8.8.8.8
-//   /data/jf-hosts      lines "address name": names answered without asking anyone (a name that points at your own network)
-//   /data/jf-ca.pem     extra trusted certificates (PEM), besides Mozilla's roots built into the program (read at start)
-//   /data/jf-tls-insecure  (any content) skips the certificate check: for a self-signed certificate (read at start)
+//   /data/jellyzoom-hosts      lines "address name": names answered without asking anyone (a name that points at your own network)
+//   /data/jellyzoom-ca.pem     extra trusted certificates (PEM), besides Mozilla's roots built into the program (read at start)
+//   /data/jellyzoom-tls-insecure  (any content) skips the certificate check: for a self-signed certificate (read at start)
 // Built without JF_HAVE_MBEDTLS, https fails with a clear message and names work over plain http, as before.
 #include "jf_tls.h"
 
@@ -164,7 +164,7 @@ std::vector<Cached> dnsCache;
 
 bool hostsFile(const std::string &name, in_addr *out)
 {
-	const std::string text = readSmall(std::string(JF_TLS_DATA) + "/jf-hosts");
+	const std::string text = readSmall(std::string(JF_TLS_DATA) + "/jellyzoom-hosts");
 	size_t at = 0;
 	while (at < text.size()) {
 		size_t eol = text.find('\n', at);
@@ -325,7 +325,7 @@ bool resolveName(const std::string &rawName, in_addr *out)
 		}
 	}
 	std::vector<std::string> servers;
-	const std::string chosen = trim(readSmall(std::string(JF_TLS_DATA) + "/jf-dns"));
+	const std::string chosen = trim(readSmall(std::string(JF_TLS_DATA) + "/jellyzoom-dns"));
 	if (!chosen.empty()) {
 		servers.push_back(chosen); // the one you chose, and only it: your DNS may block names on purpose
 	} else {
@@ -426,14 +426,14 @@ bool tlsPrepare(std::string &why)
 	for (const mbedtls_x509_crt *c = &shared.roots; c && c->version != 0; c = c->next) {
 		builtin++;
 	}
-	const std::string extra = readBig(std::string(JF_TLS_DATA) + "/jf-ca.pem", 1 << 20);
+	const std::string extra = readBig(std::string(JF_TLS_DATA) + "/jellyzoom-ca.pem", 1 << 20);
 	int added = 0;
 	if (!extra.empty()) {
 		std::string pem = extra;
 		pem.push_back('\0');
 		const int bad = mbedtls_x509_crt_parse(&shared.roots, reinterpret_cast<const unsigned char *>(pem.data()), pem.size());
 		if (bad < 0) {
-			say("/data/jf-ca.pem could not be read (%s): ignored", mbedText(bad).c_str());
+			say("/data/jellyzoom-ca.pem could not be read (%s): ignored", mbedText(bad).c_str());
 		} else {
 			for (const mbedtls_x509_crt *c = &shared.roots; c && c->version != 0; c = c->next) {
 				added++;
@@ -441,7 +441,7 @@ bool tlsPrepare(std::string &why)
 			added -= builtin;
 		}
 	}
-	shared.insecure = fileExists(std::string(JF_TLS_DATA) + "/jf-tls-insecure");
+	shared.insecure = fileExists(std::string(JF_TLS_DATA) + "/jellyzoom-tls-insecure");
 	r = mbedtls_ssl_config_defaults(&shared.conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
 	if (r != 0) {
 		shared.why = "TLS could not be set up: " + mbedText(r);
@@ -452,8 +452,8 @@ bool tlsPrepare(std::string &why)
 	mbedtls_ssl_conf_rng(&shared.conf, randomBytes, nullptr);
 	mbedtls_ssl_conf_ca_chain(&shared.conf, &shared.roots, nullptr);
 	mbedtls_ssl_conf_authmode(&shared.conf, shared.insecure ? MBEDTLS_SSL_VERIFY_NONE : MBEDTLS_SSL_VERIFY_REQUIRED);
-	say("TLS ready: %d trusted roots (%d skipped), %d from /data/jf-ca.pem%s", builtin, skipped, added,
-		shared.insecure ? "; CERTIFICATE CHECK IS OFF (/data/jf-tls-insecure)" : "");
+	say("TLS ready: %d trusted roots (%d skipped), %d from /data/jellyzoom-ca.pem%s", builtin, skipped, added,
+		shared.insecure ? "; CERTIFICATE CHECK IS OFF (/data/jellyzoom-tls-insecure)" : "");
 	shared.ok = true;
 	return true;
 }
@@ -515,7 +515,7 @@ std::string certProblem(uint32_t flags, const std::string &name)
 	} else if (flags & MBEDTLS_X509_BADCERT_CN_MISMATCH) {
 		text = "the certificate is for a different name than " + name;
 	} else if (flags & (MBEDTLS_X509_BADCERT_NOT_TRUSTED | MBEDTLS_X509_BADCERT_BAD_KEY | MBEDTLS_X509_BADCERT_BAD_MD | MBEDTLS_X509_BADCERT_BAD_PK)) {
-		text = "the certificate is not trusted (a self-signed one? put its CA in /data/jf-ca.pem, or create /data/jf-tls-insecure to skip the check)";
+		text = "the certificate is not trusted (a self-signed one? put its CA in /data/jellyzoom-ca.pem, or create /data/jellyzoom-tls-insecure to skip the check)";
 	} else {
 		char buf[256];
 		mbedtls_x509_crt_verify_info(buf, sizeof(buf), "", flags);
@@ -778,8 +778,8 @@ void relay(int cfd, const std::string &name, int port, bool tls)
 {
 	in_addr ip;
 	if (!resolveName(name, &ip)) {
-		setError("Could not find " + name + " (the console cannot look names up by itself: put the address in /data/jf-hosts, e.g. \"192.168.1.10 " +
-			name + "\", or a DNS server in /data/jf-dns)");
+		setError("Could not find " + name + " (the console cannot look names up by itself: put the address in /data/jellyzoom-hosts, e.g. \"192.168.1.10 " +
+			name + "\", or a DNS server in /data/jellyzoom-dns)");
 		::close(cfd);
 		return;
 	}
@@ -1024,7 +1024,7 @@ extern "C" int jf_tls_open(const char *name, int port, int tls, int *local_port)
 
 extern "C" int jf_tls_insecure(void)
 {
-	return fileExists(std::string(JF_TLS_DATA) + "/jf-tls-insecure") ? 1 : 0;
+	return fileExists(std::string(JF_TLS_DATA) + "/jellyzoom-tls-insecure") ? 1 : 0;
 }
 
 extern "C" void jf_tls_error(char *buf, int size)

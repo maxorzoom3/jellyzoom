@@ -1,8 +1,8 @@
 // Runtime server and login settings. Files in /data win; config.h values are the fallback.
-//   /data/jf-server   "host" or "host:port"
-//   /data/jf-user     user name
-//   /data/jf-pass     password (optional, only if you put it there yourself: the program never writes it, and keeps only
-//                     the sign-in token in /data/jf-token. A plain-text password is best deleted once you are signed in)
+//   /data/jellyzoom-server   "host" or "host:port"
+//   /data/jellyzoom-user     user name
+//   /data/jellyzoom-pass     password (optional, only if you put it there yourself: the program never writes it, and keeps only
+//                     the sign-in token in /data/jellyzoom-token. A plain-text password is best deleted once you are signed in)
 #pragma once
 #include <cstdio>
 #include <cstdlib>
@@ -156,15 +156,15 @@ inline Values &store(const char *defHost, int defPort, const char *defUser, cons
 		v.port = defPort;
 		v.user = defUser ? defUser : "";
 		v.pass = defPass ? defPass : "";
-		const std::string server = readFile("/data/jf-server");
+		const std::string server = readFile("/data/jellyzoom-server");
 		if (!server.empty()) {
 			parseAddress(server, defPort, &v.host, &v.port);
 		}
-		const std::string u = readFile("/data/jf-user");
+		const std::string u = readFile("/data/jellyzoom-user");
 		if (!u.empty()) {
 			v.user = u;
 		}
-		const std::string p = readFile("/data/jf-pass");
+		const std::string p = readFile("/data/jellyzoom-pass");
 		if (!p.empty()) {
 			v.pass = p;
 		}
@@ -233,9 +233,9 @@ inline bool save(const std::string &host, int port, const std::string &user, con
 	v.port = port;
 	v.user = user;
 	v.pass = pass;
-	bool ok = writeFile("/data/jf-server", serverTextOf(host, port));
-	ok = writeFile("/data/jf-user", user) && ok;
-	// the password is never written: the sign-in token (jf-token) is what is kept
+	bool ok = writeFile("/data/jellyzoom-server", serverTextOf(host, port));
+	ok = writeFile("/data/jellyzoom-user", user) && ok;
+	// the password is never written: the sign-in token (jellyzoom-token) is what is kept
 	return ok;
 }
 } // namespace jfconf

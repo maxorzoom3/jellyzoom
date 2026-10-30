@@ -128,7 +128,7 @@ public:
 	void mixInto8(std::int16_t *out, int frames);
 	// 2, or 8 when this film's sound is 5.1 / 7.1 and goes out as 7.1: what the output must be opened with.
 	int outputChannels() const;
-	// false: mix every film down to stereo (a file /data/jf-stereo does the same at start-up)
+	// false: mix every film down to stereo (a file /data/jellyzoom-stereo does the same at start-up)
 	void setSurround(bool on);
 	// true: HDR10 pictures are delivered as 16-bit PQ (Frame::hdr) instead of being tone-mapped to SDR. Only for a display
 	// that is in HDR10 mode; pictures converted before the change stay as they were.

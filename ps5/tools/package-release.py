@@ -131,7 +131,7 @@ def main():
     out = ROOT / "dist" / f"release-{args.tag}"
     shutil.rmtree(out, ignore_errors=True)
     (out / "source").mkdir(parents=True)
-    project = "Mortalfin"
+    project = param["localizedParameters"]["en-US"]["titleName"]
     zip_path = out / f"{project}-{args.tag}.zip"
     make_zip(folder, zip_path, when)
     files = check_zip(zip_path, folder)

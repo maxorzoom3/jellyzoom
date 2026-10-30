@@ -22,7 +22,7 @@ const char *jf_device_id(void);
 #define JF_SERVER_TLS 0
 #define JF_USERNAME ""
 #define JF_PASSWORD ""
-#define JF_CLIENT_NAME "Mortalfin"
+#define JF_CLIENT_NAME "Jellyzoom"
 #define JF_DEVICE_NAME "PlayStation 5"
 #ifdef JF_APP_VERSION
 #define JF_CLIENT_VERSION JF_APP_VERSION

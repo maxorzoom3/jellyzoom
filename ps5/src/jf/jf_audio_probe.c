@@ -1,7 +1,7 @@
 /*
  * Jellyfin Wheel - audio output probe (Stage 16). Opens the console's compressed-audio (bitstream) ports one after
  * the other in two call orders and writes every return code to klog (AUDIO lines). It sends only silence, so nothing
- * is heard, and it always puts the HDMI output back to normal PCM afterwards. Runs only when /data/jf-audio-probe
+ * is heard, and it always puts the HDMI output back to normal PCM afterwards. Runs only when /data/jellyzoom-audio-probe
  * exists, before the picture starts; remove that file to stop it.
  *
  * The function names, argument lists and mode numbers are those of the PS5-Audio-Passthrough-Research notes and
@@ -181,10 +181,10 @@ int jf_audio_probe(void)
    };
    unsigned i;
    int ok = 0, total = 0;
-   if (access("/data/jf-audio-probe", F_OK) != 0) {
+   if (access("/data/jellyzoom-audio-probe", F_OK) != 0) {
       return -1;
    }
-   say("AUDIO: probe starts (silence only; delete /data/jf-audio-probe to stop it)");
+   say("AUDIO: probe starts (silence only; delete /data/jellyzoom-audio-probe to stop it)");
    i = (unsigned)sceAudioOutInit();
    say("AUDIO: sceAudioOutInit = 0x%08x (the app calls it later, when its own sound starts; 0x8026000e means it was already done)", i);
    monitor_info();

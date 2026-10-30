@@ -1,4 +1,4 @@
-// The Mortalfin logo: full size in the middle for a moment when the app starts, then it glides up into the top-left corner
+// The Jellyzoom logo: full size in the middle for a moment when the app starts, then it glides up into the top-left corner
 // and stays there. The picture is a PNG inside the program (jf_brand_png.inc), decoded with the gate's image decoder.
 #pragma once
 
@@ -74,9 +74,9 @@ class Logo
 		const float s = size * (e < 1.0f ? grow : 1.0f);
 		const Rect r{ cx - s * 0.5f, cy - s * 0.5f, s, s };
 		if (e < 1.0f) {
-			// a warm glow behind it that breathes, and falls away as it leaves
+			// a glow behind it that breathes, and falls away as it leaves
 			const float pulse = 0.5f + 0.5f * std::sin(t * 3.0f);
-			list.glow(r.inset(s * 0.12f), s * 0.3f, s * 0.35f, Color{ 1.0f, 0.45f, 0.08f, (0.30f + 0.12f * pulse) * rise * (1.0f - e) });
+			list.glow(r.inset(s * 0.12f), s * 0.3f, s * 0.35f, Color{ 0.18f, 0.65f, 1.0f, (0.30f + 0.12f * pulse) * rise * (1.0f - e) });
 		}
 		list.image(tex_, r, hui::gfx::kFullUv, Color{ 1.0f, 1.0f, 1.0f, alpha }, 0.0f);
 	}

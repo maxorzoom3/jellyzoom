@@ -4,7 +4,7 @@
  *
  * The call sequence and structure layouts are those of EVO Player / Jelly5 (GPL-3.0-or-later,
  * app/engine/media/include/sce/sce_videodec2.h and src/evo_vdec_native.c), which in turn follow
- * ProsperoLight. Skipped when /data/jf-vdec-off exists.
+ * ProsperoLight. Skipped when /data/jellyzoom-vdec-off exists.
  */
 #include "platform.h"
 
@@ -127,8 +127,8 @@ done:
 
 int jf_vdec_probe(void)
 {
-   if (access("/data/jf-vdec-off", F_OK) == 0) {
-      say("VDEC: probe skipped (/data/jf-vdec-off)");
+   if (access("/data/jellyzoom-vdec-off", F_OK) == 0) {
+      say("VDEC: probe skipped (/data/jellyzoom-vdec-off)");
       return -1;
    }
    size_t flex = 0, flexTotal = 0;

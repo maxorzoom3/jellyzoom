@@ -1,16 +1,26 @@
-# Building Mortalfin
+# Building Jellyzoom
 
-Mortalfin builds against a PS5 stack checked out beside it (all under one folder):
+Jellyzoom builds against a PS5 stack checked out beside it (all under one folder):
 
 - `PS5_Vulkan`: the RADV release archive, the link recipe, the native tool and `libc.prx`
 - the payload SDK fork: `ps5/tools/setup-sdk.sh` installs it at the pinned revision
 - `PS5_VKHomebrewUI`: the UI kit; `ps5/ui/setup-kit.sh` exports it at the pinned revision (from GitHub when it is not beside it)
 
+For HTTPS support, build mbedTLS before building the title:
+
+```bash
+sdk=$(bash ps5/tools/setup-sdk.sh)
+PS5_PAYLOAD_SDK="$sdk" bash ps5/tools/build-mbedtls.sh
+```
+
+Without `vendor/mbedtls-ps5`, the app builds without HTTPS support. AV1 playback similarly requires
+`vendor/dav1d-ps5` (built with `ps5/tools/build-dav1d.sh`).
+
 ## A development build
 
 ```bash
 cp ps5/src/jf/config.h.example ps5/src/jf/config.h   # your own server and login; git ignores this file
-ps5/tools/build.sh        # dist/PPSA99141/: eboot.bin, sce_sys, assets
+ps5/tools/build.sh        # dist/PPSA99483/: eboot.bin, sce_sys, assets
 ps5/tools/deploy.sh       # upload what changed to the console's FTP server
 ps5/tools/run.sh          # a test run
 ```
@@ -26,13 +36,13 @@ ps5/tools/release.sh
 
 That writes the version into `param.json`, makes a release build (`JF_RELEASE`: no server, no login, no device id of yours;
 the device id is made on each console), runs `ps5/tools/security-check.py` on the source, the git history, the built
-title and the zip, packages `dist/release-<version>/Mortalfin-<version>.zip`, and writes the Homebrew Store record.
+title and the zip, packages `dist/release-<version>/Jellyzoom-<version>.zip`, and writes the Homebrew Store record.
 It prepares files only; [RELEASING.md](RELEASING.md) says how to publish them.
 
 ## The version
 
 One file, `VERSION` (`1.0.0-beta.1`, `1.0.0-rc.1`, `1.0.0`). `ps5/tools/version.py --sync` writes the console's
-`contentVersion` from it (`01.000.001` for 1.0.0-beta.1); the About page and the name Mortalfin reports to Jellyfin use it too.
+`contentVersion` from it (`01.000.001` for 1.0.0-beta.1); the About page and the name Jellyzoom reports to Jellyfin use it too.
 
 ## Layout
 

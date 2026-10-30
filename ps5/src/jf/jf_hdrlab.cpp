@@ -75,7 +75,7 @@ double pqEncode(double nits)
 
 bool wanted()
 {
-	static const char *path = "/data/jf-hdr-lab";
+	static const char *path = "/data/jellyzoom-hdr-lab";
 	if (access(path, F_OK) != 0) {
 		return false;
 	}
@@ -145,7 +145,7 @@ bool setOutput(int handle, bool hdr, std::uint32_t width, std::uint32_t height)
 	if (statusRc != 0) {
 		say("HDRLAB: could not read output status: rc=0x%08x", static_cast<unsigned>(statusRc));
 	}
-	if (st.refreshRate == 13 && access("/data/jf-hdr-60", F_OK) != 0) {
+	if (st.refreshRate == 13 && access("/data/jellyzoom-hdr-60", F_OK) != 0) {
 		say("HDRLAB: trying HDR10 without leaving 119.88 Hz");
 		if (change("Bgr10A2Bt2100Pq at 119.88 Hz", kFormatHdr)) {
 			g_usedChange = true;

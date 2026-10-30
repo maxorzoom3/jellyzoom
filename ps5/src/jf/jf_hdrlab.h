@@ -21,7 +21,7 @@ namespace jfhdr {
 
 constexpr int kVariants = 4;
 
-// True once if the flag file /data/jf-hdr-lab exists (the file is removed so the lab runs for one start only).
+// True once if the flag file /data/jellyzoom-hdr-lab exists (the file is removed so the lab runs for one start only).
 inline bool wanted() { return jfhdr_wanted(); }
 // The VideoOut handle the swapchain's buffers were registered on (-1 if none is found). Logged.
 inline int findHandle() { return jfhdr_findHandle(); }

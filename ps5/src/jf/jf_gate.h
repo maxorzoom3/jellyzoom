@@ -245,7 +245,7 @@ int jf_gate_finished(void);
  * the screen only asks and reads back. */
 /* 0 working, 1 needs a server, 2 needs a sign-in (server known), 3 signed in */
 int jf_gate_auth_state(void);
-int jf_gate_tls_insecure(void); /* 1 when the certificate check is switched off (/data/jf-tls-insecure): the sign-in page warns */
+int jf_gate_tls_insecure(void); /* 1 when the certificate check is switched off (/data/jellyzoom-tls-insecure): the sign-in page warns */
 int jf_gate_auth_busy(void); /* 1 while the worker is on a request the screen made */
 /* 0 the last problem ("" if none), 1 the server's name, 2 the signed-in profile, 3 the Quick Connect code, 4 the server's Quick Connect page (for a QR code) */
 void jf_gate_auth_text(int which, char *out, int size);

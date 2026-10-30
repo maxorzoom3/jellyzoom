@@ -25,7 +25,7 @@ extern "C" {
 void say(const char *, ...) {}
 int __wrap_access(const char *path, int)
 {
-	return flag && std::strcmp(path, "/data/jf-hdr-60") == 0 ? 0 : -1;
+	return flag && std::strcmp(path, "/data/jellyzoom-hdr-60") == 0 ? 0 : -1;
 }
 int __wrap_usleep(unsigned int) { return 0; }
 int sceVideoOutGetOutputStatus(std::int32_t, void *status)

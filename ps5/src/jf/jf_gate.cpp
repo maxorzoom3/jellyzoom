@@ -1690,11 +1690,11 @@ bool signInToken(const std::string &token, JfSession *out, std::string *name)
 
 void rememberSession(const JfSession &s, const std::string &name)
 {
-	jfconf::writeFile("/data/jf-server", jfconf::serverText());
-	jfconf::writeFile("/data/jf-token", s.access_token);
-	jfconf::writeFile("/data/jf-userid", s.user_id);
-	jfconf::writeFile("/data/jf-user", name);
-	std::remove("/data/jf-setup");
+	jfconf::writeFile("/data/jellyzoom-server", jfconf::serverText());
+	jfconf::writeFile("/data/jellyzoom-token", s.access_token);
+	jfconf::writeFile("/data/jellyzoom-userid", s.user_id);
+	jfconf::writeFile("/data/jellyzoom-user", name);
+	std::remove("/data/jellyzoom-setup");
 	std::lock_guard<std::mutex> g(authLock);
 	profileName = name;
 }
@@ -1757,9 +1757,9 @@ bool probeServer(const std::string &host, int port, std::string *why)
 bool acquireSession(JfSession *out)
 {
 	std::string name, why;
-	const bool forced = fileExists("/data/jf-setup");
+	const bool forced = fileExists("/data/jellyzoom-setup");
 	if (!forced && jfconf::configured()) {
-		const std::string token = jfconf::readFile("/data/jf-token");
+		const std::string token = jfconf::readFile("/data/jellyzoom-token");
 		if (!token.empty() && reachable(jfconf::host(), jfconf::port(), 3000) && signInToken(token, out, &name)) {
 			say("JFGATE: kept session accepted for %s", name.c_str());
 			rememberSession(*out, name);
@@ -2538,12 +2538,12 @@ extern "C" int jf_gate_signout(int forget_server)
 	}
 	worker.join();
 
-	std::remove("/data/jf-token");
-	std::remove("/data/jf-userid");
-	jfconf::writeFile("/data/jf-user", "");
-	jfconf::writeFile("/data/jf-setup", "1"); // the build's own login (config.h) must not sign straight back in
+	std::remove("/data/jellyzoom-token");
+	std::remove("/data/jellyzoom-userid");
+	jfconf::writeFile("/data/jellyzoom-user", "");
+	jfconf::writeFile("/data/jellyzoom-setup", "1"); // the build's own login (config.h) must not sign straight back in
 	if (forget_server) {
-		std::remove("/data/jf-server");
+		std::remove("/data/jellyzoom-server");
 		jfconf::setServer("", 8096);
 	}
 	{

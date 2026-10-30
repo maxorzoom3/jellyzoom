@@ -93,7 +93,7 @@ class Screen
 		using hui::gfx::Align;
 		const Color white{ 1, 1, 1, 1 };
 		list.rounded_rect(Rect{ 0, 0, 1920, 1080 }, 0.0f, Color{ 0.02f, 0.025f, 0.05f, 0.88f });
-		hui::ui::text(list, fonts.display, "Mortalfin", 960.0f, 150.0f, 64, white, Align::center);
+		hui::ui::text(list, fonts.display, "Jellyzoom", 960.0f, 150.0f, 64, white, Align::center);
 		if (!started_) {
 			hui::ui::text(list, fonts.regular, "Connecting ...", 960.0f, 540.0f, 40, white.with_alpha(0.7f), Align::center);
 			return;
@@ -113,7 +113,7 @@ class Screen
 		if (!keyboardOpen_ && (certOff_ || (plain_ && page_ == Page::signin))) {
 			const Color amber{ 1.0f, 0.78f, 0.35f, 0.9f };
 			if (certOff_) {
-				hui::ui::text(list, fonts.regular, "Certificate check is OFF (/data/jf-tls-insecure): https servers are not verified.", 960.0f, 1010.0f, 24, amber, Align::center);
+				hui::ui::text(list, fonts.regular, "Certificate check is OFF (/data/jellyzoom-tls-insecure): https servers are not verified.", 960.0f, 1010.0f, 24, amber, Align::center);
 			}
 			if (plain_ && page_ == Page::signin) {
 				hui::ui::text(list, fonts.regular, "This server is not encrypted (http): a password is sent as plain text. Quick Connect or https is safer.", 960.0f, certOff_ ? 1044.0f : 1020.0f, 24, amber, Align::center);

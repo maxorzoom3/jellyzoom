@@ -1,4 +1,4 @@
-# Testing Mortalfin
+# Testing Jellyzoom
 
 Thank you for testing. This is a beta: the most useful thing you can do is use it the way you normally watch, and tell me
 what goes wrong.
@@ -19,7 +19,7 @@ what goes wrong.
   Rewind into the intro after skipping or playing past it; also rewind before it and let playback reach it again. The prompt should reappear.
 - On an episode with outro metadata, check that Skip Outro appears only during the outro. Triangle skips to the end of the segment;
   when it ends within one second of the file's end, Jellyfin marks it watched and the next episode starts.
-  With no next episode, or with `/data/jf-no-autoplay`, it returns to the library; movies never start a next episode.
+  With no next episode, or with `/data/jellyzoom-no-autoplay`, it returns to the library; movies never start a next episode.
   If marking fails, it returns to the library and shows an error. Check a failed or timed-out next-episode lookup and cancel it with Back.
   Also try an outro followed by more content, replay an outro after rewinding, and check an episode without an outro.
 - Scrub with L2/R2 and confirm a trickplay preview appears when the server has generated sheets; also try without sheets.
@@ -38,7 +38,7 @@ what goes wrong.
 - Start and resume a 4K HDR episode, including with Dolby Digital Plus bitstream audio, and check that sound and video
   begin together without a burst of late drops. Repeat with SDR, HDR disabled, subtitles, pause and seeking.
 - On a 120 Hz HDR-capable display, HDR playback first tries to keep the 120 Hz output mode. Check the TV's signal
-  information and compare picture colour and motion with the 59.94 Hz path, selected by creating `/data/jf-hdr-60`.
+  information and compare picture colour and motion with the 59.94 Hz path, selected by creating `/data/jellyzoom-hdr-60`.
   Buffer acceptance alone does not prove that the TV received HDR at 120 Hz. If the HDR buffer is refused, the normal
   59.94 Hz path is tried instead. Also test a display that starts at 60 Hz and playback with HDR disabled.
 
@@ -59,7 +59,7 @@ The app writes a log to the console's debug port. To capture it, on a computer o
 nc <console address> 3232 | tee klog.txt
 ```
 
-Start that **before** you open Mortalfin, reproduce the problem, then stop it with Ctrl+C and attach `klog.txt`.
+Start that **before** you open Jellyzoom, reproduce the problem, then stop it with Ctrl+C and attach `klog.txt`.
 **Look through the file first**: it can contain your server's address and the names of your films. Remove what you do not want to share.
 For playback stutter, the `PLAYER PERF` lines summarize the decoder, conversion times, late drops and video queues.
 The dropped-pictures counter counts decoded pictures more than 300 ms behind the audio clock; it does not count every
@@ -73,6 +73,7 @@ reset the measurement window. At 59.94 Hz, approximately 24 fps video normally a
 On a Linux host with a C++17 compiler and the json-c development package installed, run:
 
 ```bash
+python3 ps5/tests/branding.py
 c++ -std=c++17 ps5/tests/playback_features.cpp ps5/src/jf/jf_playback_features.cpp $(pkg-config --cflags --libs json-c) -o /tmp/mortalfin-playback-tests
 /tmp/mortalfin-playback-tests
 c++ -std=c++17 ps5/tests/subtitle_text.cpp -o /tmp/mortalfin-subtitle-tests

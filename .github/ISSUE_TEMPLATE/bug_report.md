@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Something does not work in Mortalfin
+about: Something does not work in Jellyzoom
 title: ''
 labels: bug
 ---

@@ -394,7 +394,7 @@ struct Player::Impl
 	Impl()
 	{
 		ring.resize(kRingFrames * 8);
-		surround = access("/data/jf-stereo", F_OK) != 0; // a file there keeps the sound stereo
+		surround = access("/data/jellyzoom-stereo", F_OK) != 0; // a file there keeps the sound stereo
 	}
 
 	void fail(const std::string &why)
@@ -583,7 +583,7 @@ struct Player::Impl
 	std::vector<std::uint8_t> bsBuf;
 	int bsDelayMs{ 0 };
 	bool sinkKnown{ false }, sinkAc3{ false }, sinkEac3{ false }, sinkDts{ false };
-	// Stage 39 (experiment): Dolby TrueHD in MAT frames, sent through the port mode named in /data/jf-truehd-test
+	// Stage 39 (experiment): Dolby TrueHD in MAT frames, sent through the port mode named in /data/jellyzoom-truehd-test
 	static constexpr int kMat = 4;
 	jfmat::Packer matPacker;
 	double matFirstPts{ 0.0 };
@@ -601,11 +601,11 @@ struct Player::Impl
 		return kind == kMat ? "Dolby TrueHD" : jfiec::kindName(kind);
 	}
 
-	// /data/jf-audio-mode: "pcm" decodes everything here, "bitstream" sends whatever can be sent, anything else (or no file): auto
+	// /data/jellyzoom-audio-mode: "pcm" decodes everything here, "bitstream" sends whatever can be sent, anything else (or no file): auto
 	static int audioMode()
 	{
 		char b[32] = { 0 };
-		FILE *f = std::fopen("/data/jf-audio-mode", "r");
+		FILE *f = std::fopen("/data/jellyzoom-audio-mode", "r");
 		if (!f) {
 			return 0;
 		}
@@ -823,7 +823,7 @@ struct Player::Impl
 		int kind = jfiec::None;
 		const char *why = "decoded here";
 		if (mode == 2) {
-			why = "PCM chosen in /data/jf-audio-mode";
+			why = "PCM chosen in /data/jellyzoom-audio-mode";
 		} else if (cp->sample_rate != 48000) {
 			why = "not 48 kHz";
 		} else if (cp->codec_id == AV_CODEC_ID_AC3 || cp->codec_id == AV_CODEC_ID_EAC3 || cp->codec_id == AV_CODEC_ID_DTS) {
@@ -845,13 +845,13 @@ struct Player::Impl
 			if (!sinkKnown) {
 				readSink();
 			}
-			if (FILE *probe = std::fopen("/data/jf-probe-truehd", "r")) {
+			if (FILE *probe = std::fopen("/data/jellyzoom-probe-truehd", "r")) {
 				std::fclose(probe);
 				probePorts();
 			}
-			// Stage 39: the experiment is on when /data/jf-truehd-test exists; its number is the port mode to try (4, or 1)
+			// Stage 39: the experiment is on when /data/jellyzoom-truehd-test exists; its number is the port mode to try (4, or 1)
 			if (mode != 2 && cp->sample_rate == 48000) {
-				if (FILE *test = std::fopen("/data/jf-truehd-test", "r")) {
+				if (FILE *test = std::fopen("/data/jellyzoom-truehd-test", "r")) {
 					int m = 4, b = 16384, f = 0, c = 1;
 					const int got = std::fscanf(test, "%d %d %d %d", &m, &b, &f, &c);
 					matCfg = got >= 4 ? std::max(0, std::min(16, c)) : 1;
@@ -876,14 +876,14 @@ struct Player::Impl
 		}
 		if (kind != jfiec::None) {
 			bsDelayMs = 0;
-			if (FILE *f = std::fopen("/data/jf-audio-delay", "r")) { // milliseconds the soundbar adds, to hold the picture back by
+			if (FILE *f = std::fopen("/data/jellyzoom-audio-delay", "r")) { // milliseconds the soundbar adds, to hold the picture back by
 				int ms = 0;
 				if (std::fscanf(f, "%d", &ms) == 1) {
 					bsDelayMs = std::max(0, std::min(500, ms));
 				}
 				std::fclose(f);
 			}
-			say("AUDIO: delay %d ms (/data/jf-audio-delay)", bsDelayMs);
+			say("AUDIO: delay %d ms (/data/jellyzoom-audio-delay)", bsDelayMs);
 			noteSet(std::string("Sound: ") + nameOf(kind) + ", sent to your soundbar");
 			std::lock_guard<std::mutex> lock(textLock);
 			infoData.bitstream = nameOf(kind);
@@ -1535,7 +1535,7 @@ struct Player::Impl
 				ai = wanted;
 			} else if (wanted < 0) {
 				// Stage 36: nothing was picked for this film: the language chosen in Settings, when the file has it
-				const int byLanguage = streamByLanguage(fc, AVMEDIA_TYPE_AUDIO, prefText("/data/jf-lang-audio"));
+				const int byLanguage = streamByLanguage(fc, AVMEDIA_TYPE_AUDIO, prefText("/data/jellyzoom-lang-audio"));
 				if (byLanguage >= 0) {
 					ai = byLanguage;
 					say("PLAYER: sound track %d chosen by the language setting", ai);
@@ -1714,8 +1714,8 @@ struct Player::Impl
 			int subPick = wantSub.load();
 			if (subPick < 0) {
 				// Stage 36: Settings > Subtitles: off, auto (when the sound is not in the subtitle language) or on
-				const std::string mode = prefText("/data/jf-sub-mode");
-				const std::string language = prefText("/data/jf-lang-sub");
+				const std::string mode = prefText("/data/jellyzoom-sub-mode");
+				const std::string language = prefText("/data/jellyzoom-lang-sub");
 				if ((mode == "on" || mode == "auto") && !language.empty()) {
 					const bool soundMatches = ai >= 0 && sameLanguage(streamLanguage(fc->streams[ai]), language);
 					if (mode == "on" || !soundMatches) {

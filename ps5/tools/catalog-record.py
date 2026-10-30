@@ -17,8 +17,8 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("version")
-    ap.add_argument("--repo", default="mortaljinx/mortalfin")
-    ap.add_argument("--author", default="mortaljinx")
+    ap.add_argument("--repo", default="maxorzoom3/jellyzoom")
+    ap.add_argument("--author", default="maxorzoom3")
     args = ap.parse_args()
     param = json.loads((ROOT / "ps5/sce_sys/param.json").read_text())
     title_id = param["titleId"]

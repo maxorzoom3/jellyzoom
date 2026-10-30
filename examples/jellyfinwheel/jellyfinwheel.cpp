@@ -254,7 +254,7 @@ public:
 	jfseerr::Screen seerr;
 	bool seerrBound{ false };
 	hui::gfx::DrawList profileList;
-	jfbrand::Logo brand;           // the Mortalfin logo: the splash at the start, then the corner
+	jfbrand::Logo brand;           // the Jellyzoom logo: the splash at the start, then the corner
 	hui::gfx::DrawList brandList;
 	int pendingAccount{ 0 };
 	int avatarTick{ 0 };
@@ -360,7 +360,7 @@ public:
 
 	VulkanExample() : KitExample()
 	{
-		title = "Mortalfin";
+		title = "Jellyzoom";
 		name = "jellyfinwheel";
 		// The kit draws the whole screen and owns the pad
 		settings.overlay = false;
@@ -1147,7 +1147,7 @@ public:
 		return film ? self->player.outputChannels() : 2;
 	}
 
-	// ---- Stage 11: the HDR lab (flag file /data/jf-hdr-lab, once) ----
+	// ---- Stage 11: the HDR lab (flag file /data/jellyzoom-hdr-lab, once) ----
 	// Puts the output in HDR10 for a few seconds and copies test patterns onto the swapchain image. CIRCLE leaves early.
 	struct HdrLab {
 		int state{ 0 }; // 0 not looked at, 1 running, 2 over
@@ -1286,7 +1286,7 @@ public:
 		jf_logo_want(gateIndex); // Stage 35
 		dropLogo();
 		chapterTimes.clear();
-		subFont = jfprofile::readText("/data/jf-sub-size") == "s" ? 34 : jfprofile::readText("/data/jf-sub-size") == "l" ? 54 : 42; // Stage 36
+		subFont = jfprofile::readText("/data/jellyzoom-sub-size") == "s" ? 34 : jfprofile::readText("/data/jellyzoom-sub-size") == "l" ? 54 : 42; // Stage 36
 		playerActive = true;
 		outroCompleted = false;
 		jf_gate_pause(1); // the stream has the network
@@ -1306,8 +1306,8 @@ public:
 	// ---- Stage 12: HDR10 playback ----
 	// An HDR10 film puts the console's output in HDR10 (BT.2100 PQ, 10:10:10:2) for as long as it plays. From then on
 	// every frame is drawn by hdrPass: the kit's UI into an image of its own, then one pass that lays it over the film
-	// in linear light and packs the words. Files on the console: /data/jf-hdr-off (never switch), /data/jf-hdr-rb (red
-	// in the low bits instead of blue), /data/jf-hdr-ui (a number: the nits of UI white, 203 by default).
+	// in linear light and packs the words. Files on the console: /data/jellyzoom-hdr-off (never switch), /data/jellyzoom-hdr-rb (red
+	// in the low bits instead of blue), /data/jellyzoom-hdr-ui (a number: the nits of UI white, 203 by default).
 	static bool flagFile(const char *path)
 	{
 		struct stat st;
@@ -1317,8 +1317,8 @@ public:
 	void hdrEnter()
 	{
 		hdrTried = true;
-		if (flagFile("/data/jf-hdr-off")) {
-			say("HDR: /data/jf-hdr-off exists, the film is tone-mapped to SDR");
+		if (flagFile("/data/jellyzoom-hdr-off")) {
+			say("HDR: /data/jellyzoom-hdr-off exists, the film is tone-mapped to SDR");
 			return;
 		}
 		if (useDynamicRendering || renderPass == VK_NULL_HANDLE || !video.view) {
@@ -1355,7 +1355,7 @@ public:
 		videoMode = 0;
 		videoW = videoH = 0;
 		player.setHdrOutput(true);
-		say("HDR: the output is HDR10 for this film (%s in the low bits)", flagFile("/data/jf-hdr-rb") ? "red" : "blue");
+		say("HDR: the output is HDR10 for this film (%s in the low bits)", flagFile("/data/jellyzoom-hdr-rb") ? "red" : "blue");
 	}
 
 	// Called before every frame of a film: the first time the film turns out to be HDR10 the output is switched
@@ -1416,11 +1416,11 @@ public:
 		look.y = (1080.0f - static_cast<float>(videoH)) * 0.5f / 1080.0f;
 		look.w = static_cast<float>(videoW) / 1920.0f;
 		look.h = static_cast<float>(videoH) / 1080.0f;
-		look.redLow = flagFile("/data/jf-hdr-rb");
+		look.redLow = flagFile("/data/jellyzoom-hdr-rb");
 		static float uiNits = 0.0f;
 		if (uiNits <= 0.0f) {
 			uiNits = 203.0f;
-			if (FILE *f = std::fopen("/data/jf-hdr-ui", "r")) {
+			if (FILE *f = std::fopen("/data/jellyzoom-hdr-ui", "r")) {
 				int n = 0;
 				if (std::fscanf(f, "%d", &n) == 1 && n >= 50 && n <= 1000) {
 					uiNits = static_cast<float>(n);
@@ -2036,12 +2036,12 @@ public:
 		hui::ui::draw_hints(list, kit.fonts, style, hints, hintCount, 960.0f - width * 0.5f, false, layout);
 	}
 
-	// Stage 20: the film's overlay. The theme with the play button in its own colour (/data/jf-play-colour: six hex digits)
+	// Stage 20: the film's overlay. The theme with the play button in its own colour (/data/jellyzoom-play-colour: six hex digits)
 	std::decay_t<decltype(ps5ui::active_theme())> filmTheme() const
 	{
 		auto t = ps5ui::active_theme();
 		float r = 0.67f, g = 0.36f, b = 0.76f; // Jellyfin purple
-		if (FILE *f = std::fopen("/data/jf-play-colour", "r")) {
+		if (FILE *f = std::fopen("/data/jellyzoom-play-colour", "r")) {
 			unsigned v = 0;
 			if (std::fscanf(f, "%x", &v) == 1 && v <= 0xFFFFFFu) {
 				r = static_cast<float>((v >> 16) & 0xFF) / 255.0f;
@@ -2662,7 +2662,7 @@ public:
 		if (skipToEnd) {
 			const jf::Item *playing = itemFor(playingItem);
 			const bool episode = playing && playing->kindRaw == "Episode";
-			if (jfp::finishOutro(episode, !flagFile("/data/jf-no-autoplay"),
+			if (jfp::finishOutro(episode, !flagFile("/data/jellyzoom-no-autoplay"),
 					[this] { return markOutroWatched(); },
 					[this] { jf_gate_next_request(playingItem); })) {
 				autoNext = 1;
@@ -2674,7 +2674,7 @@ public:
 		if (!skipToEnd && state == jfp::State::ended && autoNext == 0) {
 			// an episode that has played to its end goes on to the next one, when the series has one
 			const jf::Item *playing = itemFor(playingItem);
-			if (playing && playing->kindRaw == "Episode" && !flagFile("/data/jf-no-autoplay")) {
+			if (playing && playing->kindRaw == "Episode" && !flagFile("/data/jellyzoom-no-autoplay")) {
 				jf_gate_next_request(playingItem);
 				autoNext = 1;
 				autoWait = 0.0;
@@ -2763,7 +2763,7 @@ public:
 			if (hdrOn) {
 				if (hdrStep < 0) {
 					hdrStep = 0;
-					if (FILE *f = std::fopen("/data/jf-hdr-gain", "r")) {
+					if (FILE *f = std::fopen("/data/jellyzoom-hdr-gain", "r")) {
 						int n = 0;
 						if (std::fscanf(f, "%d", &n) == 1 && n >= 100) {
 							hdrStep = std::min(20, (n - 100 + 2) / 5);
@@ -2777,7 +2777,7 @@ public:
 					hdrStep = std::max(0, std::min(20, hdrStep + d));
 					const int percent = 100 + 5 * hdrStep;
 					jfhp_set_gain(percent);
-					if (FILE *f = std::fopen("/data/jf-hdr-gain", "w")) {
+					if (FILE *f = std::fopen("/data/jellyzoom-hdr-gain", "w")) {
 						std::fprintf(f, "%d\n", percent);
 						std::fclose(f);
 					}

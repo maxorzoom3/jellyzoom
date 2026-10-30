@@ -194,7 +194,7 @@ inline bool request(const std::string &hostSpec, int port, const char *method, c
 	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK);
 
 	std::string req = std::string(method) + " " + path + " HTTP/1.1\r\nHost: " + vhost +
-		"\r\nAccept: */*\r\nUser-Agent: Mortalfin\r\nConnection: close\r\n" + extraHeaders;
+		"\r\nAccept: */*\r\nUser-Agent: Jellyzoom\r\nConnection: close\r\n" + extraHeaders;
 	if (!body.empty() || std::strcmp(method, "POST") == 0 || std::strcmp(method, "DELETE") == 0) {
 		req += "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
 	}
@@ -382,13 +382,13 @@ inline void loadConfig()
 		return;
 	}
 	s.loaded = true;
-	const std::string server = readText("/data/jf-seerr");
+	const std::string server = readText("/data/jellyzoom-seerr");
 	const size_t colon = server.rfind(':');
 	if (colon != std::string::npos) {
 		s.host = server.substr(0, colon);
 		s.port = std::max(1, std::atoi(server.c_str() + colon + 1));
 	}
-	s.cookie = readText("/data/jf-seerr-cookie");
+	s.cookie = readText("/data/jellyzoom-seerr-cookie");
 }
 
 inline std::string cookieHeader(const State &s)
@@ -453,8 +453,8 @@ inline void startLogin(const std::string &host, int port, const std::string &use
 				if (me) {
 					json_object_put(me);
 				}
-				writeText("/data/jf-seerr", host + ":" + std::to_string(port));
-				writeText("/data/jf-seerr-cookie", cookie);
+				writeText("/data/jellyzoom-seerr", host + ":" + std::to_string(port));
+				writeText("/data/jellyzoom-seerr-cookie", cookie);
 				st.loginState = 1;
 			}
 		}
@@ -1330,7 +1330,7 @@ class Screen
 			return;
 		}
 		// no session: the Jellyfin password, when it was saved, signs in without asking
-		const std::string saved = readText("/data/jf-pass");
+		const std::string saved = readText("/data/jellyzoom-pass");
 		if (!host.empty() && !saved.empty() && !user_.empty()) {
 			connecting_ = true;
 			startLogin(host, port, user_, saved);
@@ -1361,7 +1361,7 @@ class Screen
 	// Sign out of Jellyfin: the Seerr session belongs to that account
 	static void forgetSession()
 	{
-		writeText("/data/jf-seerr-cookie", "");
+		writeText("/data/jellyzoom-seerr-cookie", "");
 		State &s = state();
 		std::lock_guard<std::mutex> g(s.m);
 		s.cookie.clear();
@@ -1425,7 +1425,7 @@ class Screen
 		if (s.needLogin.load() && !connecting_ && !needSignIn_) {
 			s.needLogin = 0;
 			rowsReset();
-			writeText("/data/jf-seerr-cookie", "");
+			writeText("/data/jellyzoom-seerr-cookie", "");
 			{
 				std::lock_guard<std::mutex> g(s.m);
 				s.cookie.clear();
@@ -1803,7 +1803,7 @@ class Screen
 			}
 		}
 		if (host.empty()) {
-			const std::string jf = readText("/data/jf-server"); // "192.168.1.10:8096": Seerr is often on the same machine
+			const std::string jf = readText("/data/jellyzoom-server"); // "192.168.1.10:8096": Seerr is often on the same machine
 			if (jf.rfind("http", 0) == 0) {
 				address_ = "https://"; // Jellyfin is behind a name: so is Seerr, probably
 			} else {
@@ -2193,7 +2193,7 @@ class Screen
 		if (in.is_pressed(hui::Action::north)) {
 			// disconnect: forget the cookie and ask again
 			leaveAll();
-			writeText("/data/jf-seerr-cookie", "");
+			writeText("/data/jellyzoom-seerr-cookie", "");
 			{
 				std::lock_guard<std::mutex> g(s.m);
 				s.cookie.clear();

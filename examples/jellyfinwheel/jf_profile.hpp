@@ -60,7 +60,7 @@ inline bool &seerrFlag()
 	static bool loaded = false;
 	if (!loaded) {
 		loaded = true;
-		const std::string choice = readText("/data/jf-seerr-on");
+		const std::string choice = readText("/data/jellyzoom-seerr-on");
 		value = choice.empty() ? true : choice[0] == '1';
 	}
 	return value;
@@ -69,7 +69,7 @@ inline bool seerrEnabled() { return seerrFlag(); }
 inline void setSeerrEnabled(bool on)
 {
 	seerrFlag() = on;
-	writeText("/data/jf-seerr-on", on ? "1" : "0");
+	writeText("/data/jellyzoom-seerr-on", on ? "1" : "0");
 }
 
 struct Language {
@@ -226,21 +226,21 @@ class Menu
 
 	void load()
 	{
-		const std::string mode = readText("/data/jf-audio-mode");
+		const std::string mode = readText("/data/jellyzoom-audio-mode");
 		audio_ = mode.rfind("pcm", 0) == 0 ? 2 : mode.rfind("bit", 0) == 0 ? 1 : 0;
-		delay_ = std::max(0, std::min(500, std::atoi(readText("/data/jf-audio-delay").c_str())));
-		langAudio_ = languageIndex(readText("/data/jf-lang-audio"));
-		langSub_ = languageIndex(readText("/data/jf-lang-sub"));
-		const std::string sm = readText("/data/jf-sub-mode");
+		delay_ = std::max(0, std::min(500, std::atoi(readText("/data/jellyzoom-audio-delay").c_str())));
+		langAudio_ = languageIndex(readText("/data/jellyzoom-lang-audio"));
+		langSub_ = languageIndex(readText("/data/jellyzoom-lang-sub"));
+		const std::string sm = readText("/data/jellyzoom-sub-mode");
 		subMode_ = sm == "on" ? 2 : sm == "auto" ? 1 : 0;
-		const std::string ss = readText("/data/jf-sub-size");
+		const std::string ss = readText("/data/jellyzoom-sub-size");
 		subSize_ = ss == "s" ? 0 : ss == "l" ? 2 : 1;
-		autoNext_ = !fileExists("/data/jf-no-autoplay");
-		const int gain = std::atoi(readText("/data/jf-hdr-gain").c_str());
+		autoNext_ = !fileExists("/data/jellyzoom-no-autoplay");
+		const int gain = std::atoi(readText("/data/jellyzoom-hdr-gain").c_str());
 		hdr_ = gain >= 100 ? std::min(20, (gain - 100 + 2) / 5) : 0;
 		seerr_ = seerrEnabled();
-		seerrAddress_ = readText("/data/jf-seerr");
-		seerrSession_ = !readText("/data/jf-seerr-cookie").empty();
+		seerrAddress_ = readText("/data/jellyzoom-seerr");
+		seerrSession_ = !readText("/data/jellyzoom-seerr-cookie").empty();
 	}
 
 	static int wrap(int value, int count) { return ((value % count) + count) % count; }
@@ -332,43 +332,43 @@ class Menu
 			switch (row_) {
 			case 0:
 				audio_ = wrap(audio_ + by, 3);
-				writeText("/data/jf-audio-mode", audio_ == 0 ? "auto" : audio_ == 1 ? "bitstream" : "pcm");
+				writeText("/data/jellyzoom-audio-mode", audio_ == 0 ? "auto" : audio_ == 1 ? "bitstream" : "pcm");
 				break;
 			case 1:
 				if (step == 0) {
 					return;
 				}
 				delay_ = std::max(0, std::min(500, delay_ + 10 * step));
-				writeText("/data/jf-audio-delay", std::to_string(delay_));
+				writeText("/data/jellyzoom-audio-delay", std::to_string(delay_));
 				fb.play(hui::audio::Cue::tick);
 				return;
 			case 2:
 				langAudio_ = wrap(langAudio_ + by, n);
-				writeText("/data/jf-lang-audio", lang[langAudio_].code);
+				writeText("/data/jellyzoom-lang-audio", lang[langAudio_].code);
 				break;
 			case 3:
 				subMode_ = wrap(subMode_ + by, 3);
-				writeText("/data/jf-sub-mode", subMode_ == 0 ? "off" : subMode_ == 1 ? "auto" : "on");
+				writeText("/data/jellyzoom-sub-mode", subMode_ == 0 ? "off" : subMode_ == 1 ? "auto" : "on");
 				break;
 			case 4:
 				langSub_ = wrap(langSub_ + by, n);
-				writeText("/data/jf-lang-sub", lang[langSub_].code);
+				writeText("/data/jellyzoom-lang-sub", lang[langSub_].code);
 				break;
 			case 5:
 				subSize_ = wrap(subSize_ + by, 3);
-				writeText("/data/jf-sub-size", subSize_ == 0 ? "s" : subSize_ == 1 ? "m" : "l");
+				writeText("/data/jellyzoom-sub-size", subSize_ == 0 ? "s" : subSize_ == 1 ? "m" : "l");
 				break;
 			case 6:
 				autoNext_ = !autoNext_;
 				if (autoNext_) {
-					std::remove("/data/jf-no-autoplay");
+					std::remove("/data/jellyzoom-no-autoplay");
 				} else {
-					writeText("/data/jf-no-autoplay", "1");
+					writeText("/data/jellyzoom-no-autoplay", "1");
 				}
 				break;
 			case 7: {
 				hdr_ = step != 0 ? std::max(0, std::min(20, hdr_ + step)) : (hdr_ + 1) % 21;
-				writeText("/data/jf-hdr-gain", std::to_string(100 + 5 * hdr_));
+				writeText("/data/jellyzoom-hdr-gain", std::to_string(100 + 5 * hdr_));
 				fb.play(hui::audio::Cue::tick);
 				return;
 			}
@@ -401,7 +401,7 @@ class Menu
 			if (!press) {
 				return;
 			}
-			writeText("/data/jf-seerr-cookie", "");
+			writeText("/data/jellyzoom-seerr-cookie", "");
 			::jf::discoverGo() = 3;
 			seerrSession_ = false;
 			fb.play(hui::audio::Cue::back);
@@ -487,7 +487,7 @@ class Menu
 		using hui::gfx::Align;
 		using hui::gfx::Color;
 		const Color white{ 1, 1, 1, 1 };
-		hui::ui::text(list, fonts.display, "Mortalfin", x, y + 40.0f, 60, white);
+		hui::ui::text(list, fonts.display, "Jellyzoom", x, y + 40.0f, 60, white);
 		char line[160];
 		std::snprintf(line, sizeof(line), "Version %s    built %s %s", version(), __DATE__, __TIME__);
 		hui::ui::text(list, fonts.regular, line, x, y + 90.0f, 28, white.with_alpha(0.7f));

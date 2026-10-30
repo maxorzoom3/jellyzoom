@@ -4,7 +4,7 @@
     python3 ps5/tools/make-ca-bundle.py [path/to/cacert.pem]      (default: the certifi package, pip install certifi)
 
 The list is data under the Mozilla Public License 2.0 (https://www.mozilla.org/MPL/2.0/). Run this again to refresh the
-roots; commit the result. The program trusts these roots plus anything in /data/jf-ca.pem.
+roots; commit the result. The program trusts these roots plus anything in /data/jellyzoom-ca.pem.
 """
 import hashlib
 import os
