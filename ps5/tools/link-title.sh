@@ -72,7 +72,8 @@ defsyms=${PS5_WEAK_DEFSYMS:-$ps5/tools/weak-defsyms.rsp}
 [[ -f $defsyms ]] || defsyms=$root/../weak-defsyms.rsp
 radv_link_flags+=("@$defsyms")
 "$sdk/bin/prospero-lld" "${radv_linker_script[@]}" --eh-frame-hdr "${radv_link_flags[@]}" \
-    --version-script "$native/app-symbols.map" --exclude-libs=ALL --wrap=sceVideoOutOpen --wrap=sceVideoOutRegisterBuffers2 --wrap=sceVideoOutSubmitFlip \
+    --version-script "$native/app-symbols.map" --version-script "$ps5/tools/title-local.map" \
+    --exclude-libs=ALL --wrap=sceVideoOutOpen --wrap=sceVideoOutRegisterBuffers2 --wrap=sceVideoOutSubmitFlip \
     -e _start -o "$work/link/llvm-pie.elf" \
     "$work/link/obj/app_crt.o" "${objects[@]}" \
     "$work/link/stubs/libSceAgc.so" "$work/link/stubs/libSceAgcDriver.so" "$work/link/stubs/libSceVideodec2.so" \

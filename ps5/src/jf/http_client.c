@@ -53,7 +53,7 @@ static int send_all(int sock, const void *data, size_t size)
     return 0;
 }
 
-static int read_all(int sock, unsigned char **out, size_t *out_size)
+static int read_all(int sock, unsigned char **out, size_t *out_size, size_t max_size)
 {
     unsigned char *buffer = NULL;
     size_t size = 0;
@@ -67,6 +67,11 @@ static int read_all(int sock, unsigned char **out, size_t *out_size)
             break;
 
         if (n < 0) {
+            free(buffer);
+            return -1;
+        }
+
+        if (max_size > 0 && (size_t)n > max_size - size) {
             free(buffer);
             return -1;
         }
@@ -199,7 +204,7 @@ static int send_request(const char *host,
         }
     }
 
-    int result = read_all(sock, response, response_size);
+    int result = read_all(sock, response, response_size, 0);
 
     close(sock);
 
@@ -253,7 +258,7 @@ int http_get(const char *host,
     unsigned char *raw = NULL;
     size_t raw_size = 0;
 
-    if (read_all(sock, &raw, &raw_size) != 0) {
+    if (read_all(sock, &raw, &raw_size, 0) != 0) {
         close(sock);
         return -1;
     }
@@ -286,12 +291,13 @@ int http_get(const char *host,
     return 0;
 }
 
-int http_post_json(const char *host,
-                   int port,
-                   const char *path,
-                   const char *auth_header,
-                   const char *json,
-                   HttpResponse *response)
+static int http_write(const char *host,
+                      int port,
+                      const char *path,
+                      const char *auth_header,
+                      const char *method,
+                      const char *json,
+                      HttpResponse *response)
 {
     if (!response)
         return -1;
@@ -314,7 +320,7 @@ int http_post_json(const char *host,
     if (send_request(
             host,
             port,
-            "POST",
+            method,
             path,
             content_type,
             json ? json : "",
@@ -349,11 +355,24 @@ int http_post_json(const char *host,
     return 0;
 }
 
-int http_get_binary(const char *host,
-                    int port,
-                    const char *path,
-                    const char *auth_header,
-                    HttpBinaryResponse *response)
+int http_post_json(const char *host, int port, const char *path, const char *auth_header,
+                   const char *json, HttpResponse *response)
+{
+    return http_write(host, port, path, auth_header, "POST", json, response);
+}
+
+int http_delete(const char *host, int port, const char *path, const char *auth_header,
+                HttpResponse *response)
+{
+    return http_write(host, port, path, auth_header, "DELETE", "", response);
+}
+
+static int http_get_binary_impl(const char *host,
+                               int port,
+                               const char *path,
+                               const char *auth_header,
+                               size_t max_body_size,
+                               HttpBinaryResponse *response)
 {
     if (!response)
         return -1;
@@ -396,7 +415,8 @@ int http_get_binary(const char *host,
     unsigned char *raw = NULL;
     size_t raw_size = 0;
 
-    if (read_all(sock, &raw, &raw_size) != 0) {
+    const size_t max_response_size = max_body_size > 0 ? max_body_size + 8192 : 0;
+    if (read_all(sock, &raw, &raw_size, max_response_size) != 0) {
         close(sock);
         return -1;
     }
@@ -413,7 +433,12 @@ int http_get_binary(const char *host,
         return -1;
     }
 
-    response->data = malloc(body_size);
+    if (max_body_size > 0 && body_size > max_body_size) {
+        free(raw);
+        return -1;
+    }
+
+    response->data = malloc(body_size ? body_size : 1);
 
     if (!response->data) {
         free(raw);
@@ -434,6 +459,28 @@ int http_get_binary(const char *host,
     free(raw);
 
     return 0;
+}
+
+int http_get_binary(const char *host,
+                    int port,
+                    const char *path,
+                    const char *auth_header,
+                    HttpBinaryResponse *response)
+{
+    return http_get_binary_impl(host, port, path, auth_header, 0, response);
+}
+
+int http_get_binary_limited(const char *host,
+                            int port,
+                            const char *path,
+                            const char *auth_header,
+                            size_t max_body_size,
+                            HttpBinaryResponse *response)
+{
+    if (max_body_size == 0) {
+        return -1;
+    }
+    return http_get_binary_impl(host, port, path, auth_header, max_body_size, response);
 }
 
 void http_response_free(HttpResponse *response)

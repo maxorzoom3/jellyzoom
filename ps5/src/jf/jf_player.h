@@ -20,6 +20,11 @@ enum class State
 	failed
 };
 
+inline bool playbackReady(bool frameReady, bool presentationReady)
+{
+	return frameReady && presentationReady;
+}
+
 struct Chapter
 {
 	float time;
@@ -83,9 +88,12 @@ public:
 
 	// gateIndex is the film's place in jf_gate's list. audioStream / subtitleStream are the server's
 	// stream numbers (-1: the file's own pick / no subtitles). Returns at once; watch state().
-	void open(int gateIndex, double resumeSeconds, int audioStream = -1, int subtitleStream = -1);
+	void open(int gateIndex, double resumeSeconds, int audioStream = -1, int subtitleStream = -1,
+		bool waitForPresentation = false);
 	// Stops, tells the server where it stopped, and waits for the threads. Safe to call when idle.
 	void close();
+	// Stops first, then explicitly marks the item watched on the server.
+	bool closeAndMarkWatched();
 
 	State state() const;
 	std::string error() const;
@@ -126,6 +134,8 @@ public:
 	// that is in HDR10 mode; pictures converted before the change stay as they were.
 	void setHdrOutput(bool on);
 	bool hdrOutput() const;
+	// Release playback after the screen has prepared its SDR or HDR output.
+	void setPresentationReady();
 
 private:
 	struct Impl;

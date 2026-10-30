@@ -1047,3 +1047,41 @@ int jf_report_stopped(
 
     return 0;
 }
+
+static int jf_set_played(const JfSession *session, const char *item_id, int played)
+{
+    if (!session || !session->user_id[0] || !item_id || !*item_id) {
+        set_error("Cannot change watched status without a user and item");
+        return -1;
+    }
+
+    char auth[4096];
+    auth_header(session, auth, sizeof(auth));
+    char path[1024];
+    snprintf(path, sizeof(path), "/Users/%s/PlayedItems/%s", session->user_id, item_id);
+    HttpResponse response;
+    const int result = played ? http_post_json(jf_host, jf_port, path, auth, "{}", &response)
+                              : http_delete(jf_host, jf_port, path, auth, &response);
+    if (result != 0) {
+        set_error("Watched status request failed");
+        return -1;
+    }
+    if (response.status < 200 || response.status >= 300) {
+        say("Jellyfin watched status HTTP %d\n", response.status);
+        http_response_free(&response);
+        set_error("The server could not change the item's watched status");
+        return -1;
+    }
+    http_response_free(&response);
+    return 0;
+}
+
+int jf_mark_played(const JfSession *session, const char *item_id)
+{
+    return jf_set_played(session, item_id, 1);
+}
+
+int jf_mark_unplayed(const JfSession *session, const char *item_id)
+{
+    return jf_set_played(session, item_id, 0);
+}

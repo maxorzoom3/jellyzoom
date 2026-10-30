@@ -174,9 +174,10 @@ def main():
 
     # The LLVM runtime the SDK links in
     llvm = ROOT.parent / "PS5_LLVM/llvm/LICENSE.TXT"
-    if llvm.exists():
-        (out / "llvm-runtime").mkdir()
-        shutil.copy2(llvm, out / "llvm-runtime/LICENSE.TXT")
+    if not llvm.exists():
+        llvm = PS5 / "licenses/LLVM-LICENSE.txt"
+    (out / "llvm-runtime").mkdir()
+    shutil.copy2(llvm, out / "llvm-runtime/LICENSE.TXT")
     parts.append(dict(
         id="llvm-runtime", name="LLVM libc++, libc++abi, libunwind and compiler-rt builtins (linked into eboot.bin)",
         licence="Apache-2.0 WITH LLVM-exception",

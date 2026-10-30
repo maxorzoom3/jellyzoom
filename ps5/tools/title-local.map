@@ -1,0 +1,7 @@
+{
+    local:
+        gai_strerror;
+        gethostbyname;
+        getnameinfo;
+        isatty;
+};

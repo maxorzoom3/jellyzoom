@@ -87,6 +87,15 @@ struct pad_reading {
 int pad_readings(const struct pad_reading **readings);
 int pad_player_readings(int player, const struct pad_reading **readings);
 
+enum {
+   REMOTE_PLAY = 1u << 0,
+   REMOTE_PAUSE = 1u << 1,
+   REMOTE_PLAY_PAUSE = 1u << 2,
+};
+/* HDMI-CEC remote readings and media-key presses from the last pad_poll. */
+int remote_readings(const struct pad_reading **readings);
+uint32_t remote_media_pressed(void);
+
 /* Rumble: the large and the small motor, 0..1 each; 0, 0 stops it. */
 void pad_vibrate(float large, float small);
 void pad_player_vibrate(int player, float large, float small);

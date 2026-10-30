@@ -23,6 +23,7 @@
 #include "jf_hdrpass.h"
 #include "jf_backdrop.h"
 #include "jf_gate.h"
+#include "jf_playback_features.h"
 #include "jf_setup.hpp"
 #include "jf_profile.hpp"
 #include "jf_seerr.hpp"
@@ -280,6 +281,21 @@ public:
 	int videoW{ 0 }, videoH{ 0 };
 	bool chaptersSet{ false };
 	float playerClock{ 0.0f };
+	jfp::SegmentPrompt introPrompt;
+	jfp::IntroPromptTimer introTimer;
+	jfp::SegmentPrompt outroPrompt;
+	jfp::SeekPreview seekPreview;
+	JfGatePlaybackExtras playbackExtras{};
+	bool playbackExtrasKnown{ false };
+	struct TrickplayTexture {
+		int sheetIndex;
+		int columns;
+		int rows;
+		std::uint32_t tex;
+		std::uint64_t lastUsed;
+	};
+	std::vector<TrickplayTexture> trickplayTextures;
+	std::uint64_t trickplayUseClock{ 0 };
 
 	// the player's panels, subtitles and badges
 	enum class Panel { none, tracks, info };
@@ -291,6 +307,8 @@ public:
 	int trackCol{ 0 }, trackRow{ 0 };
 	std::string noteText;
 	float noteClock{ 0.0f };
+	std::string wheelNotice;
+	float wheelNoticeClock{ 0.0f };
 	bool muteFocus{ false }; // Stage 20: the pad is on the mute button
 	// Stage 35: the title logo in place of the poster, and the chapter marks for the glass scrubber
 	std::uint32_t logoTex{ 0 };
@@ -330,6 +348,7 @@ public:
 	bool uiHiddenByPad{ false };
 	int autoNext{ 0 };      // 1 while the next episode is being asked for
 	double autoWait{ 0.0 };
+	bool outroCompleted{ false };
 	bool scrubbing{ false };
 	double scrubTarget{ 0.0 };
 	double retireAge{ 0.0 };
@@ -474,6 +493,7 @@ public:
 	// A title's details, from what the server said
 	static void applyMeta(jf::Item &item, const JfGateMeta &meta)
 	{
+		item.id = meta.id ? meta.id : "";
 		item.titleText = meta.name ? meta.name : "";
 		item.kindRaw = meta.kind ? meta.kind : "";
 		item.kindText = (meta.genre && meta.genre[0]) ? std::string(meta.genre) : kindText(meta.kind ? meta.kind : "");
@@ -513,6 +533,7 @@ public:
 		item.letter = (first >= 'A' && first <= 'Z') ? first : '#';
 		item.favorite = meta.favorite != 0;
 		item.watched = meta.watched != 0;
+		item.watchedPending = meta.watched_pending != 0;
 		item.fresh = meta.added_days >= 0 && meta.added_days <= 14;
 		item.ready = true;
 		item.bind();
@@ -771,6 +792,36 @@ public:
 	// What the design asked for since the last frame: a new sort, a favourite, a search
 	void handleRequests()
 	{
+		if (!jf::actionNotice().empty()) {
+			wheelNotice = jf::actionNotice();
+			wheelNoticeClock = 6.0f;
+			jf::actionNotice().clear();
+		}
+		JfGateWatchedResult watched{};
+		while (jf_gate_take_watched_result(&watched)) {
+			if (watched.success)
+				++jf::watchedRevision();
+			for (size_t category = 0; category < jf::lists().size(); ++category) {
+				jf::List &list = *jf::lists()[category];
+				for (const auto &item : list.items) {
+					if (item->id != watched.item_id)
+						continue;
+					item->watchedPending = false;
+					if (watched.success) {
+						item->watched = watched.watched != 0;
+						item->progress = 0.0f;
+						item->resumeSeconds = 0.0f;
+					}
+				}
+				if (watched.success && ((list.kind >= 1 && list.kind <= 4) ||
+				    (list.kind == 0 && list.filter == 1)))
+					states[category].dirty = true;
+			}
+			if (!watched.success) {
+				wheelNotice = "Could not update watched status on the server";
+				wheelNoticeClock = 6.0f;
+			}
+		}
 		for (const jf::ViewRequest &request : jf::viewRequests()) {
 			jf_gate_set_view(request.category, request.sort, request.filter);
 		}
@@ -800,7 +851,9 @@ public:
 		for (size_t category = 0; category < jf::lists().size(); category++) {
 			ListState &state = states[category];
 			const int kind = jf::lists()[category]->kind;
-			if (!state.built || kind < 1 || kind > 4) {
+			const bool refreshable = (kind >= 1 && kind <= 4) ||
+			                         (kind == 0 && jf::lists()[category]->filter == 1 && state.dirty);
+			if (!state.built || !refreshable) {
 				continue;
 			}
 			const bool shown = static_cast<int>(category) == view.category;
@@ -1204,6 +1257,8 @@ public:
 		if (!found || !found->ready || !found->playable) {
 			return;
 		}
+		jf_gate_playback_extras_clear();
+		resetPlaybackExtras();
 		const jf::Item &item = *found;
 		if (!video.view) {
 			if (!video.create(physicalDevice, device, queue, vulkanDevice->queueFamilyIndices.graphics)) {
@@ -1233,6 +1288,7 @@ public:
 		chapterTimes.clear();
 		subFont = jfprofile::readText("/data/jf-sub-size") == "s" ? 34 : jfprofile::readText("/data/jf-sub-size") == "l" ? 54 : 42; // Stage 36
 		playerActive = true;
+		outroCompleted = false;
 		jf_gate_pause(1); // the stream has the network
 		panel = Panel::none;
 		playDetState = 0;
@@ -1244,7 +1300,7 @@ public:
 		playDet = JfGateDetails();
 		std::cerr << "PLAYER: play \"" << item.titleText << "\" from " << resume << " s, sound track " << options.audio
 				  << ", subtitles " << options.subtitle << std::endl;
-		player.open(item.gateIndex, resume, options.audio, options.subtitle);
+		player.open(item.gateIndex, resume, options.audio, options.subtitle, true);
 	}
 
 	// ---- Stage 12: HDR10 playback ----
@@ -1318,9 +1374,11 @@ public:
 		}
 		if (info.range != "HDR10") {
 			hdrTried = true; // an SDR film (or HLG, which stays tone-mapped)
+			player.setPresentationReady();
 			return;
 		}
 		hdrEnter();
+		player.setPresentationReady();
 	}
 
 	// Back to SDR (and the 119.88 Hz mode) when the film is over
@@ -1375,19 +1433,37 @@ public:
 		VK_CHECK_RESULT(vkEndCommandBuffer(cmd));
 	}
 
+	bool markOutroWatched()
+	{
+		const bool marked = player.closeAndMarkWatched();
+		outroCompleted = true;
+		if (!marked) {
+			wheelNotice = "Could not mark this item watched on the server";
+			wheelNoticeClock = 6.0f;
+		} else if (jf::Item *item = itemFor(playingItem)) {
+			item->watched = true;
+			item->progress = 0.0f;
+			item->resumeSeconds = 0.0f;
+		}
+		return marked;
+	}
+
 	void stopPlayback()
 	{
 		const double position = player.position();
 		const double duration = player.duration();
 		player.close();
+		jf_gate_playback_extras_clear();
+		resetPlaybackExtras();
 		hdrLeave();
 		jf::Item *item = itemFor(playingItem);
-		if (item && duration > 0.0) {
+		if (item && !outroCompleted && duration > 0.0) {
 			const double fraction = position / duration;
 			item->watched = item->watched || fraction > 0.95;
 			item->progress = fraction > 0.95 ? 0.0f : static_cast<float>(std::max(0.0, fraction));
 			item->resumeSeconds = fraction > 0.95 ? 0.0f : static_cast<float>(position);
 		}
+		outroCompleted = false;
 		playerActive = false;
 		playingItem = -1;
 		jf_logo_want(-1);
@@ -1745,7 +1821,7 @@ public:
 
 	// Stage 37: picture subtitles. They keep the place the disc gave them, except that on a wide film they move into the
 	// black bar when they fit (and lift clear of the controls); true when one is showing
-	bool drawSubtitlePictures(hui::gfx::DrawList &list, float controlsShown)
+	bool drawSubtitlePictures(hui::gfx::DrawList &list, float controlsShown, const hui::gfx::Rect *skip)
 	{
 		const std::vector<jfp::SubPicture> pics = player.subtitlePictures(player.position());
 		for (size_t i = 0; i < picTex.size();) {
@@ -1813,6 +1889,15 @@ public:
 			const float barTop = 1080.0f - bar * 0.5f - (bottom - top) * 0.5f; // centred in the lower bar
 			dy = (barTop - top) * away + lift * (1.0f - away);
 		}
+		if (skip) {
+			float left = 1920.0f, right = 0.0f;
+			for (const Placed &p : placed) {
+				left = std::min(left, p.r.x);
+				right = std::max(right, p.r.x + p.r.w);
+			}
+			dy -= jfp::subtitleLiftForPrompt(left, top + dy, right, bottom + dy,
+				skip->x, skip->y, skip->x + skip->w, skip->y + skip->h);
+		}
 		for (const Placed &p : placed) {
 			list.image(p.tex, { p.r.x, p.r.y + dy, p.r.w, p.r.h }, hui::gfx::kFullUv, hui::gfx::Color{ 1, 1, 1, 1 }, 0.0f);
 		}
@@ -1820,9 +1905,9 @@ public:
 	}
 
 	// The line the file says now, white with a dark edge, near the bottom
-	void drawSubtitle(hui::gfx::DrawList &list, float controlsShown)
+	void drawSubtitle(hui::gfx::DrawList &list, float controlsShown, const hui::gfx::Rect *skip)
 	{
-		if (drawSubtitlePictures(list, controlsShown)) {
+		if (drawSubtitlePictures(list, controlsShown, skip)) {
 			return;
 		}
 		const std::string text = player.subtitleAt(player.position());
@@ -1854,13 +1939,25 @@ public:
 				baseline = inBar * away + (1010.0f - 260.0f) * (1.0f - away);
 			}
 		}
+		if (skip) {
+			float width = 0.0f;
+			for (const std::string &line : lines)
+				width = std::max(width, kit.fonts.semibold.measure(line, subFont));
+			const float top = baseline - lineGap * static_cast<float>(lines.size() - 1) -
+				kit.fonts.semibold.font->ascent(static_cast<float>(subFont));
+			const float bottom = baseline + kit.fonts.semibold.font->descent(static_cast<float>(subFont));
+			baseline -= jfp::subtitleLiftForPrompt(960.0f - width * 0.5f, top, 960.0f + width * 0.5f, bottom,
+				skip->x, skip->y, skip->x + skip->w, skip->y + skip->h);
+		}
 		for (size_t i = 0; i < lines.size(); i++) {
 			const float y = baseline - lineGap * static_cast<float>(lines.size() - 1 - i);
-			for (const float dx : { -2.5f, 2.5f }) {
-				for (const float dy : { -2.5f, 2.5f }) {
-					hui::ui::text(list, kit.fonts.semibold, lines[i].c_str(), 960.0f + dx, y + dy, subFont,
-						hui::gfx::Color{ 0, 0, 0, 0.9f }, hui::gfx::Align::center);
-				}
+			const float offsets[][2] = {
+				{ -1.5f, 0.0f }, { 1.5f, 0.0f }, { 0.0f, -1.5f }, { 0.0f, 1.5f },
+				{ -1.06f, -1.06f }, { 1.06f, -1.06f }, { -1.06f, 1.06f }, { 1.06f, 1.06f }
+			};
+			for (const auto &offset : offsets) {
+				hui::ui::text(list, kit.fonts.semibold, lines[i].c_str(), 960.0f + offset[0], y + offset[1], subFont,
+					hui::gfx::Color{ 0, 0, 0, 0.9f }, hui::gfx::Align::center);
 			}
 			hui::ui::text(list, kit.fonts.semibold, lines[i].c_str(), 960.0f, y, subFont, hui::gfx::Color{ 1, 1, 1, 1 },
 				hui::gfx::Align::center);
@@ -1986,6 +2083,89 @@ public:
 			retired.push_back(t.tex);
 		}
 		picTex.clear();
+	}
+
+	void clearTrickplayTextures()
+	{
+		for (const TrickplayTexture &texture : trickplayTextures) {
+			retired.push_back(texture.tex);
+		}
+		trickplayTextures.clear();
+		trickplayUseClock = 0;
+	}
+
+	void resetPlaybackExtras()
+	{
+		introPrompt.reset();
+		introTimer.reset();
+		outroPrompt.reset();
+		seekPreview.reset();
+		playbackExtras = {};
+		playbackExtrasKnown = false;
+		clearTrickplayTextures();
+	}
+
+	void pollPlaybackExtras()
+	{
+		if (playbackExtrasKnown || playingItem < 0) {
+			return;
+		}
+		JfGatePlaybackExtras result{};
+		if (!jf_gate_playback_extras_get(playingItem, &result) || result.state != 1) {
+			return;
+		}
+		playbackExtras = result;
+		playbackExtrasKnown = true;
+		if (result.has_intro) {
+			introPrompt.setSegment({ result.intro_start, result.intro_end });
+		}
+		if (result.has_outro) {
+			outroPrompt.setSegment({ result.outro_start, result.outro_end });
+		}
+	}
+
+	void takeTrickplayImages()
+	{
+		JfGateTrickplayImage image{};
+		while (jf_gate_trickplay_take(&image)) {
+			if (image.gate_index != playingItem || !image.rgba || image.width <= 0 || image.height <= 0) {
+				std::free(image.rgba);
+				continue;
+			}
+			if (!playbackExtrasKnown || playbackExtras.trickplay_width <= 0 || playbackExtras.trickplay_height <= 0 ||
+				image.width % playbackExtras.trickplay_width != 0 || image.height % playbackExtras.trickplay_height != 0) {
+				std::free(image.rgba);
+				continue;
+			}
+			const int columns = image.width / playbackExtras.trickplay_width;
+			const int rows = image.height / playbackExtras.trickplay_height;
+			if (columns < 1 || columns > playbackExtras.trickplay_tile_width ||
+				rows < 1 || rows > playbackExtras.trickplay_tile_height) {
+				std::free(image.rgba);
+				continue;
+			}
+			const std::uint32_t texture = kit.renderer.create_texture(image.width, image.height, image.rgba);
+			std::free(image.rgba);
+			if (!texture) {
+				continue;
+			}
+			for (size_t i = 0; i < trickplayTextures.size();) {
+				if (trickplayTextures[i].sheetIndex == image.sheet_index) {
+					retired.push_back(trickplayTextures[i].tex);
+					trickplayTextures.erase(trickplayTextures.begin() + static_cast<std::ptrdiff_t>(i));
+				} else {
+					++i;
+				}
+			}
+			if (trickplayTextures.size() >= 2) {
+				const auto oldest = std::min_element(trickplayTextures.begin(), trickplayTextures.end(),
+					[](const TrickplayTexture &a, const TrickplayTexture &b) { return a.lastUsed < b.lastUsed; });
+				jf_gate_trickplay_forget(playingItem, oldest->sheetIndex);
+				retired.push_back(oldest->tex);
+				trickplayTextures.erase(oldest);
+			}
+			trickplayTextures.push_back({ image.sheet_index, columns, rows, texture, ++trickplayUseClock });
+		}
 	}
 
 	void takeLogo()
@@ -2208,12 +2388,125 @@ public:
 			hui::gfx::Color{ 0.0f, 0.0f, 0.0f, 0.7f * shown });
 	}
 
+	hui::gfx::Rect skipPromptRect() const
+	{
+		return { 1390.0f, jfp::skipPromptTop(controls.bounds().y, controls.visibility()), 420.0f, 82.0f };
+	}
+
+	void drawSkipPrompt(hui::gfx::DrawList &list, const char *label, float progress = -1.0f)
+	{
+		using hui::gfx::Color;
+		using hui::gfx::Rect;
+		const Rect r = skipPromptRect();
+		const Color white{ 1, 1, 1, 1 };
+		const Color accent = controls.style.theme.primary;
+		list.glow(r, 18.0f, 22.0f, accent.with_alpha(0.28f));
+		list.rounded_rect(r, 18.0f, Color{ 0.025f, 0.035f, 0.06f, 0.91f });
+		if (progress >= 0.0f && progress < 1.0f) {
+			list.push_clip({ r.x, r.y, r.w * std::clamp(progress, 0.0f, 1.0f), r.h });
+			list.rounded_rect(r, 18.0f, hui::gfx::mix(Color{ 0.025f, 0.035f, 0.06f, 1.0f }, accent, 0.65f));
+			list.pop_clip();
+		}
+		list.bordered_rect(r, 18.0f, Color{ 0, 0, 0, 0 }, 1.5f, white.with_alpha(0.34f));
+		hui::ui::text(list, kit.fonts.semibold, label, r.x + 125.0f, r.y + 35.0f, 25, white,
+			hui::gfx::Align::center);
+		hui::ui::text(list, kit.fonts.regular, "TRIANGLE / REMOTE OK", r.x + 308.0f, r.y + 51.0f, 14,
+			white.with_alpha(0.72f), hui::gfx::Align::center);
+	}
+
+	void drawTrickplayPreview(hui::gfx::DrawList &list, double seconds, bool linger = false)
+	{
+		if (!playbackExtrasKnown || playbackExtras.state != 1 || !std::isfinite(seconds)) {
+			return;
+		}
+		jfp::TrickplayInfo info;
+		info.width = playbackExtras.trickplay_width;
+		info.height = playbackExtras.trickplay_height;
+		info.tileWidth = playbackExtras.trickplay_tile_width;
+		info.tileHeight = playbackExtras.trickplay_tile_height;
+		info.thumbnailCount = playbackExtras.trickplay_count;
+		info.interval = playbackExtras.trickplay_interval;
+		if (!info.valid()) {
+			return;
+		}
+		jfp::ThumbnailLocation location{};
+		if (!jfp::mapThumbnail(info, seconds, &location)) {
+			return;
+		}
+		jf_gate_trickplay_request(playingItem, location.sheet);
+
+		using hui::gfx::Color;
+		using hui::gfx::Rect;
+		const Rect frame{ 760.0f, 342.0f, 400.0f, 258.0f };
+		const Color white{ 1, 1, 1, 1 };
+		list.rounded_rect(frame, 14.0f, Color{ 0.025f, 0.035f, 0.06f, 0.94f });
+		list.bordered_rect(frame, 14.0f, Color{ 0, 0, 0, 0 }, 1.5f, white.with_alpha(0.25f));
+
+		const float previewWidth = frame.w - 24.0f;
+		const float previewHeight = frame.h - 58.0f;
+		const float aspect = static_cast<float>(info.width) / static_cast<float>(info.height);
+		float imageWidth = previewWidth;
+		float imageHeight = imageWidth / aspect;
+		if (imageHeight > previewHeight) {
+			imageHeight = previewHeight;
+			imageWidth = imageHeight * aspect;
+		}
+		const Rect imageRect{ frame.x + (frame.w - imageWidth) * 0.5f, frame.y + 10.0f, imageWidth, imageHeight };
+
+		TrickplayTexture *found = nullptr;
+		for (TrickplayTexture &texture : trickplayTextures) {
+			if (texture.sheetIndex == location.sheet) {
+				found = &texture;
+				break;
+			}
+		}
+		if (found) {
+			if (linger) {
+				seekPreview.ready();
+			}
+			found->lastUsed = ++trickplayUseClock;
+			const Rect uv{ static_cast<float>(location.x) / static_cast<float>(found->columns),
+				static_cast<float>(location.y) / static_cast<float>(found->rows),
+				1.0f / static_cast<float>(found->columns), 1.0f / static_cast<float>(found->rows) };
+			list.image(found->tex, imageRect, uv, white, 8.0f);
+		} else {
+			list.rounded_rect(imageRect, 8.0f, Color{ 1, 1, 1, 0.08f });
+			hui::ui::text(list, kit.fonts.semibold, "LOADING PREVIEW", imageRect.x + imageRect.w * 0.5f,
+				imageRect.y + imageRect.h * 0.5f + 8.0f, 19, white.with_alpha(0.72f), hui::gfx::Align::center);
+		}
+
+		const int wholeSeconds = static_cast<int>(std::clamp(seconds, 0.0, 359999.0));
+		char stamp[24];
+		if (wholeSeconds >= 3600) {
+			std::snprintf(stamp, sizeof(stamp), "%d:%02d:%02d", wholeSeconds / 3600, (wholeSeconds / 60) % 60, wholeSeconds % 60);
+		} else {
+			std::snprintf(stamp, sizeof(stamp), "%d:%02d", wholeSeconds / 60, wholeSeconds % 60);
+		}
+		hui::ui::text(list, kit.fonts.semibold, stamp, frame.x + frame.w * 0.5f, frame.y + frame.h - 10.0f, 18,
+			white.with_alpha(0.9f), hui::gfx::Align::center);
+	}
+
+	void seekFromControls(double seconds, bool showPreview = true)
+	{
+		const double duration = player.duration();
+		introPrompt.observeSeek(seconds, duration);
+		introTimer.reset();
+		outroPrompt.observeSeek(seconds, duration);
+		if (showPreview && std::isfinite(seconds) && duration > 0.0) {
+			seekPreview.show(std::clamp(seconds, 0.0, std::max(0.0, duration - 2.0)));
+		} else if (!showPreview) {
+			seekPreview.reset();
+		}
+		player.seek(seconds);
+	}
+
 	void renderPlayer()
 	{
 		hdrUpdate();
 		prepareFrame();
 		const float dt = std::min(frameTimer, 0.05f);
 		playerClock += dt;
+		seekPreview.tick(dt);
 		hui::InputFrame input = kit.input();
 		holdOptions(dt);
 		updateTelemetry();
@@ -2256,8 +2549,17 @@ public:
 			}
 		}
 		takeLogo();
+		pollPlaybackExtras();
+		takeTrickplayImages();
 		const jfp::State state = player.state();
 		const bool running = state == jfp::State::buffering || state == jfp::State::playing || state == jfp::State::paused;
+		const double duration = player.duration();
+		const bool introEligible = running && introPrompt.visible(player.position(), duration);
+		introTimer.update(introEligible, state == jfp::State::playing, dt);
+		const bool introPromptVisible = introEligible && panel == Panel::none &&
+			introTimer.visible(!controls.hidden() && !uiHiddenByPad);
+		const bool outroEligible = running && outroPrompt.visible(player.position(), duration);
+		const bool outroPromptVisible = outroEligible && panel == Panel::none && !introEligible;
 		if (running) {
 			if (!chaptersSet) {
 				std::vector<hui::ui::MediaChapter> list;
@@ -2282,7 +2584,7 @@ public:
 		if (running) {
 			if (panelWasOpen && padInput.is_pressed(hui::Action::back)) {
 				panel = Panel::none;
-			} else {
+			} else if (!((introPromptVisible || outroPromptVisible) && padInput.is_pressed(hui::Action::north))) {
 				panelInput(padInput);
 			}
 		}
@@ -2291,14 +2593,36 @@ public:
 		const bool backPress = input.is_pressed(hui::Action::back);
 		const bool uiWasHidden = controls.hidden();
 		const bool hideNow = backPress && !uiWasHidden && running;
-		const bool swallow = uiHiddenByPad && !backPress && (input.pressed != 0 || input.nav != hui::Direction::none);
-		if (swallow) {
+		const bool introWake = jfp::wakeIntroControls(introEligible, introTimer.expired(), uiWasHidden,
+			input.is_pressed(hui::Action::confirm));
+		const bool swallow = (uiHiddenByPad || introWake) && !backPress &&
+			(input.pressed != 0 || input.nav != hui::Direction::none);
+		const bool skipHandled = jfp::skipPromptPressed(introPromptVisible || outroPromptVisible, panelWasOpen, hideNow,
+			input.is_pressed(hui::Action::north), kit.remoteConfirmPressed());
+		const bool inputActivity = input.pressed != 0 || input.nav != hui::Direction::none ||
+			std::fabs(input.stick_x) > 0.3f || std::fabs(input.stick_y) > 0.3f;
+		const jfp::PlaybackControlWake wake = jfp::playbackControlWake(skipHandled, swallow, inputActivity);
+		if (wake.clearManualHide) {
 			uiHiddenByPad = false;
+		}
+		bool skipToEnd = false;
+		if (skipHandled) {
+			scrubbing = false;
+			jfp::SegmentPrompt &prompt = introPromptVisible ? introPrompt : outroPrompt;
+			skipToEnd = outroPromptVisible && jfp::segmentEndsAtDuration(playbackExtras.outro_end, duration);
+			if (!skipToEnd) {
+				const double target = prompt.skipTarget(duration);
+				if (target > player.position()) {
+					seekFromControls(target, false);
+				} else {
+					seekPreview.reset();
+				}
+				prompt.dismiss();
+			}
 		}
 		controls.style.auto_hide = uiHiddenByPad ? 0.001f : 5.0f;
 		controls.style.hide_paused = uiHiddenByPad;
-		if (input.pressed != 0 || input.nav != hui::Direction::none || std::fabs(input.stick_x) > 0.3f ||
-			std::fabs(input.stick_y) > 0.3f) {
+		if (wake.wake) {
 			controls.wake();
 		}
 		// Stage 20: the mute button right of the volume slider. RIGHT from the volume button reaches it, CROSS mutes or
@@ -2307,7 +2631,7 @@ public:
 			muteFocus = false;
 		}
 		bool muteHandled = false;
-		if (running && !swallow && !hideNow) {
+		if (running && !swallow && !hideNow && !skipHandled) {
 			if (muteFocus) {
 				if (input.is_pressed(hui::Action::confirm)) {
 					controls.toggle_mute(feedback);
@@ -2326,7 +2650,8 @@ public:
 		}
 		hui::InputFrame quiet{};
 		quiet.connected = true;
-		const hui::ui::Event event = controls.handle(swallow || hideNow || muteHandled || muteFocus ? quiet : input, feedback);
+		const hui::ui::Event event = controls.handle(
+			swallow || hideNow || muteHandled || muteFocus || skipHandled ? quiet : input, feedback);
 		if (hideNow) {
 			uiHiddenByPad = true;
 			controls.style.auto_hide = 0.001f;
@@ -2334,7 +2659,19 @@ public:
 		}
 		bool leave = backPress && !hideNow;
 		int pendingNext = -1;
-		if (state == jfp::State::ended && autoNext == 0) {
+		if (skipToEnd) {
+			const jf::Item *playing = itemFor(playingItem);
+			const bool episode = playing && playing->kindRaw == "Episode";
+			if (jfp::finishOutro(episode, !flagFile("/data/jf-no-autoplay"),
+					[this] { return markOutroWatched(); },
+					[this] { jf_gate_next_request(playingItem); })) {
+				autoNext = 1;
+				autoWait = 0.0;
+			} else {
+				leave = true;
+			}
+		}
+		if (!skipToEnd && state == jfp::State::ended && autoNext == 0) {
 			// an episode that has played to its end goes on to the next one, when the series has one
 			const jf::Item *playing = itemFor(playingItem);
 			if (playing && playing->kindRaw == "Episode" && !flagFile("/data/jf-no-autoplay")) {
@@ -2349,6 +2686,10 @@ public:
 			autoWait += static_cast<double>(dt);
 			const int found = jf_gate_next_state();
 			if (leave || found < 0 || autoWait > 12.0) {
+				if (!leave && (found < -1 || autoWait > 12.0)) {
+					wheelNotice = "Could not load the next episode";
+					wheelNoticeClock = 6.0f;
+				}
 				jf_gate_next_cancel();
 				autoNext = 0;
 				leave = true;
@@ -2376,7 +2717,7 @@ public:
 			case hui::ui::MediaCommand::seek:
 			case hui::ui::MediaCommand::rewind:
 			case hui::ui::MediaCommand::forward:
-				player.seek(controls.seek_position());
+				seekFromControls(controls.seek_position());
 				break;
 			case hui::ui::MediaCommand::previous:
 			case hui::ui::MediaCommand::next: {
@@ -2395,7 +2736,7 @@ public:
 						break;
 					}
 				}
-				player.seek(target);
+				seekFromControls(target);
 				break;
 			}
 			case hui::ui::MediaCommand::volume:
@@ -2406,7 +2747,15 @@ public:
 				break;
 			}
 		}
-		if (running) {
+		if (running && !skipToEnd) {
+			const uint32_t media = panelWasOpen ? 0 : remote_media_pressed();
+			if (media & REMOTE_PLAY) {
+				player.setPaused(false);
+			} else if (media & REMOTE_PAUSE) {
+				player.setPaused(true);
+			} else if (media & REMOTE_PLAY_PAUSE) {
+				player.setPaused(!player.paused());
+			}
 			if (input.is_pressed(hui::Action::west)) {
 				player.setPaused(!player.paused());
 			}
@@ -2440,7 +2789,7 @@ public:
 			// L2 / R2 scrub, faster the harder the trigger is pulled; the film jumps there when it is let go
 			const float pull = input.trigger_r - input.trigger_l;
 			const float level = std::fabs(pull);
-			if (level > 0.08f && player.duration() > 0.0) {
+			if (!skipHandled && level > 0.08f && player.duration() > 0.0) {
 				if (!scrubbing) {
 					scrubbing = true;
 					scrubTarget = player.position();
@@ -2455,7 +2804,8 @@ public:
 				controls.wake();
 			} else if (scrubbing) {
 				scrubbing = false;
-				player.seek(scrubTarget);
+				if (!skipHandled)
+					seekFromControls(scrubTarget);
 			}
 		}
 		controls.set_playing(!player.paused());
@@ -2474,6 +2824,11 @@ public:
 			playerList.image(videoTex, rect, uv, hui::gfx::Color{ 1.0f, 1.0f, 1.0f, 1.0f }, 0.0f);
 		}
 		const float shown = controls.visibility();
+		const bool introDraw = running && panel == Panel::none && introPrompt.visible(player.position(), duration) &&
+			introTimer.visible(!controls.hidden() && !uiHiddenByPad);
+		const bool outroDraw = running && panel == Panel::none && !introEligible &&
+			outroPrompt.visible(player.position(), duration);
+		const hui::gfx::Rect skipRect = skipPromptRect();
 		if (shown > 0.01f) {
 			drawPlayerScrims(playerList, shown);
 			drawFilmLogo(playerList, shown);
@@ -2482,7 +2837,7 @@ public:
 			drawPlayerHints(playerList, shown);
 		}
 		if (running) {
-			drawSubtitle(playerList, shown);
+			drawSubtitle(playerList, shown, introDraw || outroDraw ? &skipRect : nullptr);
 			const std::string status = player.subtitleStatus();
 			const std::string toast = noteClock > 0.0f ? noteText : status;
 			if (!toast.empty()) {
@@ -2496,6 +2851,19 @@ public:
 				drawTracksPanel(playerList);
 			} else if (panel == Panel::info) {
 				drawInfoPanel(playerList);
+			}
+		}
+		if (introDraw) {
+			drawSkipPrompt(playerList, "SKIP INTRO",
+				introTimer.expired() ? -1.0f : static_cast<float>(introTimer.progress()));
+		} else if (outroDraw) {
+			drawSkipPrompt(playerList, "SKIP OUTRO");
+		}
+		if (running && panel == Panel::none) {
+			if (scrubbing) {
+				drawTrickplayPreview(playerList, scrubTarget);
+			} else if (seekPreview.visible()) {
+				drawTrickplayPreview(playerList, seekPreview.target(), true);
 			}
 		}
 		if (state == jfp::State::opening || state == jfp::State::buffering) {
@@ -2624,6 +2992,7 @@ public:
 		}
 		prepareFrame();
 		const float dt = std::min(frameTimer, 0.05f);
+		wheelNoticeClock = std::max(0.0f, wheelNoticeClock - dt);
 		// A test run ignores the pad: the design shows its entrance and rests
 		hui::InputFrame input = kit.input();
 		if (ps5.frameBudget) {
@@ -2713,6 +3082,13 @@ public:
 		frame.reset();
 		frame.glass_texture = kit.renderer.glass_texture();
 		screen->draw(frame);
+		if (wheelNoticeClock > 0.0f) {
+			const float w = kit.fonts.semibold.measure(wheelNotice.c_str(), 24) + 56.0f;
+			frame.overlay.rounded_rect({ 960.0f - w * 0.5f, 215.0f, w, 52.0f }, 26.0f,
+				hui::gfx::Color{ 0.03f, 0.04f, 0.07f, 0.92f });
+			hui::ui::text(frame.overlay, kit.fonts.semibold, wheelNotice.c_str(), 960.0f, 249.0f, 24,
+				hui::gfx::Color{ 1.0f, 0.8f, 0.8f, 1.0f }, hui::gfx::Align::center);
+		}
 		kit.renderer.begin();
 		kit.renderer.backdrop(frame.backdrop);
 		backdropDraw();

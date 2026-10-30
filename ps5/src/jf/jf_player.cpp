@@ -25,6 +25,7 @@
 #include "jf_avio.h"
 #include "jf_tonemap.hpp"
 #include "jf_subimage.hpp"
+#include "jf_subtitle_text.hpp"
 #include "jf_hdrsub.hpp"
 #include "jf_hwdec.h"
 #include "jf_av1.hpp"
@@ -33,6 +34,7 @@
 #include "jf_iec61937.hpp"
 #include "jf_mat.hpp"
 #include "jf_conf.hpp"
+#include "jf_present_metrics.h"
 
 extern "C" {
 #include "platform.h"
@@ -134,14 +136,15 @@ std::string stripMarkup(const std::string &in)
 			at += std::strlen(e.to);
 		}
 	}
-	return out;
+	return jfsubtext::withoutFormattingMarks(out);
 }
 
 // SRT: numbered blocks of "00:01:02,345 --> 00:01:05,000" and one or two lines of text
 void parseSrt(const std::string &text, std::vector<Cue> &out)
 {
 	size_t pos = 0;
-	if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF && static_cast<unsigned char>(text[1]) == 0xBB) {
+	if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF &&
+	    static_cast<unsigned char>(text[1]) == 0xBB && static_cast<unsigned char>(text[2]) == 0xBF) {
 		pos = 3;
 	}
 	bool inCue = false;
@@ -312,7 +315,8 @@ struct Player::Impl
 {
 	// ---- the session ----
 	std::atomic<int> phase{ 0 }; // 0 idle, 1 opening, 2 running, 3 ended, 4 failed
-	std::atomic<bool> gate{ false }; // the first picture of this position is queued: the clock may run
+	std::atomic<bool> gate{ false }; // the first picture of this position is queued
+	std::atomic<bool> presentationReady{ true };
 	std::atomic<bool> stopFlag{ false };
 	std::atomic<bool> pausedFlag{ false };
 	std::atomic<long long> seekMs{ -1 };
@@ -378,6 +382,8 @@ struct Player::Impl
 	std::vector<VFrame> pool;
 	VFrame shown;
 	std::uint64_t serial{ 0 };
+	PresentMetrics presentMetrics;
+	unsigned presentGeneration{ 0 };
 
 	// ---- packets for the video thread ----
 	std::mutex packetLock;
@@ -412,6 +418,7 @@ struct Player::Impl
 		hasAudio = false;
 		eof = false;
 		gate = false;
+		lateTotal = 0;
 		pendingAudio = -1;
 		curAudio = -1;
 		{
@@ -453,6 +460,8 @@ struct Player::Impl
 		clearPackets();
 		shown = VFrame();
 		serial = 0;
+		presentMetrics.reset();
+		presentGeneration = generation.load();
 	}
 
 	void recycle(VFrame &&f)
@@ -482,6 +491,11 @@ struct Player::Impl
 	}
 
 	// ---- the clock ----
+	bool ready() const
+	{
+		return playbackReady(gate.load(), presentationReady.load());
+	}
+
 	double position()
 	{
 		std::lock_guard<std::mutex> lock(audioLock);
@@ -489,7 +503,7 @@ struct Player::Impl
 			return baseValid ? basePts + static_cast<double>(consumed) / (static_cast<double>(kRate) * ringMul.load()) - (bsKind.load() != 0 ? bsDelayMs / 1000.0 : 0.0) : seekTarget;
 		}
 		const auto now = Clock::now();
-		if (gate && !pausedFlag && phase == 2) {
+		if (ready() && !pausedFlag && phase == 2) {
 			wall += std::chrono::duration<double>(now - wallTick).count();
 		}
 		wallTick = now;
@@ -500,7 +514,7 @@ struct Player::Impl
 	void mixChannels(int ch, std::int16_t *out, int frames)
 	{
 		std::lock_guard<std::mutex> lock(audioLock);
-		if (bsKind.load() != 0 || !gate || !baseValid || pausedFlag || ringCh != ch) {
+		if (bsKind.load() != 0 || !ready() || !baseValid || pausedFlag || ringCh != ch) {
 			return;
 		}
 		const size_t cap = kRingFrames * static_cast<size_t>(ch);
@@ -632,7 +646,7 @@ struct Player::Impl
 	int takeGrain(std::int16_t *out, int frames)
 	{
 		std::lock_guard<std::mutex> lock(audioLock);
-		if (!gate || !baseValid || pausedFlag || ringCh != 2) {
+		if (!ready() || !baseValid || pausedFlag || ringCh != 2) {
 			return 0;
 		}
 		const size_t n = static_cast<size_t>(frames) * 2;
@@ -1028,6 +1042,9 @@ struct Player::Impl
 		int lateStreak = 0;
 		int reportedPeak = 0;
 		bool reportedPass = false;
+		auto perfStart = Clock::now();
+		double convertTotalMs = 0.0, convertMaxMs = 0.0;
+		long long convertCount = 0, lastDropped = 0;
 		while (!stopFlag) {
 			PacketItem it;
 			{
@@ -1041,6 +1058,28 @@ struct Player::Impl
 				if (it.pkt) {
 					packetBytes -= static_cast<size_t>(it.pkt->size);
 				}
+			}
+			const auto perfNow = Clock::now();
+			if (std::chrono::duration<double>(perfNow - perfStart).count() >= 10.0) {
+				if (phase.load() == 2 && !pausedFlag) {
+					size_t queuedBytes = 0, queuedFrames = 0;
+					{
+						std::lock_guard<std::mutex> lock(packetLock);
+						queuedBytes = packetBytes;
+					}
+					{
+						std::lock_guard<std::mutex> lock(videoLock);
+						queuedFrames = frames.size();
+					}
+					say("PLAYER PERF: %s, %lld conversions avg %.1f ms max %.1f ms, %lld late drops, video queue %zu frames %zu KiB",
+						useHw ? "hardware" : useAv1 ? "dav1d" : "software", convertCount,
+						convertCount ? convertTotalMs / static_cast<double>(convertCount) : 0.0, convertMaxMs,
+						lateTotal.load() - lastDropped, queuedFrames, queuedBytes / 1024);
+				}
+				perfStart = perfNow;
+				convertTotalMs = convertMaxMs = 0.0;
+				convertCount = 0;
+				lastDropped = lateTotal.load();
 			}
 			if (it.flush) {
 				avcodec_flush_buffers(vctx);
@@ -1066,6 +1105,10 @@ struct Player::Impl
 					useHw = false;
 					hw.close();
 					say("PLAYER: hardware decoding failed, continuing in software");
+					{
+						std::lock_guard<std::mutex> lock(textLock);
+						infoData.videoCodec = std::string(avcodec_get_name(vctx->codec_id)) + " (software)";
+					}
 					av_packet_free(&it.pkt);
 					requestSeek(position());
 					continue;
@@ -1100,7 +1143,7 @@ struct Player::Impl
 					continue;
 				}
 				// a picture the sound has already passed is not worth converting: keep one in four so the screen still moves
-				if (phase.load() == 2 && pts < position() - 0.3 && lateStreak < 3) {
+				if (phase.load() == 2 && ready() && pts < position() - 0.3 && lateStreak < 3) {
 					lateStreak++;
 					lateTotal++;
 					av_frame_unref(fr);
@@ -1115,7 +1158,12 @@ struct Player::Impl
 						pool.pop_back();
 					}
 				}
+				const auto convertStart = Clock::now();
 				const bool ok = conv.convert(fr, f, hdrOut.load());
+				const double convertMs = std::chrono::duration<double, std::milli>(Clock::now() - convertStart).count();
+				convertTotalMs += convertMs;
+				convertMaxMs = std::max(convertMaxMs, convertMs);
+				++convertCount;
 				av_frame_unref(fr);
 				if (ok && (conv.peakNits != reportedPeak || conv.passThrough != reportedPass)) {
 					reportedPeak = conv.peakNits;
@@ -1416,6 +1464,7 @@ struct Player::Impl
 			itemId = id;
 			mediaSource = pb.media_source_id;
 		}
+		jf_gate_playback_extras_request(gateIndex, id.c_str(), pb.media_source_id);
 		char path[1024];
 		std::snprintf(path, sizeof(path), "/Videos/%s/stream?Static=true&MediaSourceId=%s&PlaySessionId=%s", id.c_str(),
 			pb.media_source_id, pb.play_session_id);
@@ -1618,8 +1667,8 @@ struct Player::Impl
 			say("PLAYER: sound decoders here: %s| missing: %s", have.c_str(), lack.empty() ? "none" : lack.c_str());
 		}
 		const double fps = vs->avg_frame_rate.den ? av_q2d(vs->avg_frame_rate) : 0.0;
-		say("PLAYER: %s %dx%d, sound %s, %.0f s", avcodec_get_name(vs->codecpar->codec_id), vs->codecpar->width,
-			vs->codecpar->height, actx ? avcodec_get_name(fc->streams[ai]->codecpar->codec_id) : "none", duration);
+		say("PLAYER: %s %dx%d %.3f fps, sound %s, %.0f s", avcodec_get_name(vs->codecpar->codec_id), vs->codecpar->width,
+			vs->codecpar->height, fps, actx ? avcodec_get_name(fc->streams[ai]->codecpar->codec_id) : "none", duration);
 
 		// A subtitle track the file carries as pictures is decoded here; a text track comes from the server as SRT
 		const int canvasFallbackW = vs->codecpar->width, canvasFallbackH = vs->codecpar->height;
@@ -1953,11 +2002,12 @@ Player::~Player()
 	close();
 }
 
-void Player::open(int gateIndex, double resumeSeconds, int audioStream, int subtitleStream)
+void Player::open(int gateIndex, double resumeSeconds, int audioStream, int subtitleStream, bool waitForPresentation)
 {
 	close();
 	Impl &p = *impl_;
 	p.resetSession();
+	p.presentationReady = !waitForPresentation;
 	p.wantAudio = audioStream;
 	p.wantSub = subtitleStream;
 	p.phase = 1;
@@ -1975,13 +2025,34 @@ void Player::close()
 	p.phase = 0;
 }
 
+bool Player::closeAndMarkWatched()
+{
+	Impl &p = *impl_;
+	std::string id;
+	{
+		std::lock_guard<std::mutex> lock(p.textLock);
+		id = p.itemId;
+	}
+	close();
+	JfSession session{};
+	if (id.empty() || !jf_gate_session(&session)) {
+		say("PLAYER: could not mark watched: missing item or session");
+		return false;
+	}
+	if (jf_mark_played(&session, id.c_str()) != 0) {
+		say("PLAYER: could not mark watched: %s", jf_last_error());
+		return false;
+	}
+	return true;
+}
+
 State Player::state() const
 {
 	const int phase = impl_->phase.load();
 	switch (phase) {
 	case 1: return State::opening;
 	case 2:
-		if (!impl_->gate) {
+		if (!impl_->ready()) {
 			return State::buffering;
 		}
 		return impl_->pausedFlag ? State::paused : State::playing;
@@ -2165,30 +2236,52 @@ std::vector<Chapter> Player::chapters() const
 bool Player::present(Frame *out)
 {
 	Impl &p = *impl_;
-	const double now = p.position();
-	std::lock_guard<std::mutex> lock(p.videoLock);
-	VFrame candidate;
-	bool have = false;
-	while (!p.frames.empty() && p.frames.front().pts <= now + 0.05) {
-		if (have) {
-			p.recycle(std::move(candidate));
-		}
-		candidate = std::move(p.frames.front());
-		p.frames.pop_front();
-		have = true;
-	}
-	if (!have) {
+	if (!p.ready()) {
+		p.presentMetrics.reset();
 		return false;
 	}
-	p.recycle(std::move(p.shown));
-	p.shown = std::move(candidate);
-	p.serial++;
-	out->rgba = p.shown.rgba.data();
-	out->width = p.shown.w;
-	out->height = p.shown.h;
-	out->serial = p.serial;
-	out->hdr = p.shown.hdr;
-	return true;
+	const double now = p.position();
+	bool have = false;
+	std::uint64_t skipped = 0;
+	{
+		std::lock_guard<std::mutex> lock(p.videoLock);
+		VFrame candidate;
+		while (!p.frames.empty() && p.frames.front().pts <= now + 0.05) {
+			if (have) {
+				p.recycle(std::move(candidate));
+				++skipped;
+			}
+			candidate = std::move(p.frames.front());
+			p.frames.pop_front();
+			have = true;
+		}
+		if (have) {
+			p.recycle(std::move(p.shown));
+			p.shown = std::move(candidate);
+			p.serial++;
+			out->rgba = p.shown.rgba.data();
+			out->width = p.shown.w;
+			out->height = p.shown.h;
+			out->serial = p.serial;
+			out->hdr = p.shown.hdr;
+		}
+	}
+	const unsigned gen = p.generation.load();
+	if (p.presentGeneration != gen || p.pausedFlag || p.phase != 2) {
+		p.presentMetrics.reset();
+		p.presentGeneration = gen;
+	} else {
+		const double nowMs = std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count();
+		PresentReport report;
+		if (p.presentMetrics.observe(nowMs, have, skipped, report)) {
+			say("PLAYER PRESENT: %.1f s, %llu render calls, %llu pictures selected, %llu presentation skips, "
+				"render gaps >25ms %llu >40ms %llu max %.1f ms, max picture gap %.1f ms",
+				report.seconds, static_cast<unsigned long long>(report.calls), static_cast<unsigned long long>(report.pictures),
+				static_cast<unsigned long long>(report.skipped), static_cast<unsigned long long>(report.gapsOver25ms),
+				static_cast<unsigned long long>(report.gapsOver40ms), report.maxCallGapMs, report.maxPictureGapMs);
+		}
+	}
+	return have;
 }
 
 void Player::mixInto(std::int16_t *out, int frames)
@@ -2219,6 +2312,13 @@ void Player::setHdrOutput(bool on)
 bool Player::hdrOutput() const
 {
 	return impl_->hdrOut.load();
+}
+
+void Player::setPresentationReady()
+{
+	std::lock_guard<std::mutex> lock(impl_->audioLock);
+	impl_->wallTick = Clock::now();
+	impl_->presentationReady = true;
 }
 
 } // namespace jfp

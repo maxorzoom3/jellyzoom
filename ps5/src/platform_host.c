@@ -66,6 +66,19 @@ pad_readings(const struct pad_reading **readings)
    return 0;
 }
 
+int
+remote_readings(const struct pad_reading **readings)
+{
+   *readings = NULL;
+   return 0;
+}
+
+uint32_t
+remote_media_pressed(void)
+{
+   return 0;
+}
+
 void
 pad_vibrate(float large, float small)
 {

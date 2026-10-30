@@ -21,17 +21,20 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <cerrno>
@@ -55,6 +58,7 @@ extern "C" {
 
 // The decoder's implementation is compiled once, in base/VulkanglTFModel.cpp
 #include "jf_conf.hpp"
+#include "jf_playback_features.h"
 #include "stb_image.h"
 
 namespace {
@@ -76,6 +80,7 @@ constexpr int kSearchMax = 60;
 
 struct Entry {
 	std::string id, imageId, name, sortName, kind, overview, genre, imageTag;
+	std::string fallbackImageId, fallbackImageTag;
 	long long runtime{ 0 }, position{ 0 };
 	int year{ 0 };
 	int addedDays{ -1 };
@@ -129,6 +134,13 @@ struct FavouriteJob {
 	bool on;
 };
 std::deque<FavouriteJob> favouriteJobs;
+struct WatchedJob {
+	std::string id;
+	bool watched;
+};
+std::deque<WatchedJob> watchedJobs;
+std::deque<JfGateWatchedResult> watchedResults;
+std::set<std::string> watchedPending;
 
 struct DetailsRecord {
 	int state{ 0 }; // 0 asked, 1 here, 2 failed
@@ -161,10 +173,41 @@ std::deque<JfGatePoster> seasonPosterReady;
 // the episode after the one that played (see jf_gate_next_request), and the titles browsed into
 struct NextJob {
 	std::string seriesId, episodeId;
+	unsigned long long serial;
 };
 std::deque<NextJob> nextJobs;
 std::atomic<int> nextState{ 0 };
 std::atomic<int> nextIndex{ -1 };
+unsigned long long nextSerial{ 0 }; // protected by lock
+
+struct PlaybackExtrasJob {
+	int gateIndex;
+	std::string itemId, mediaSourceId;
+	int generation;
+};
+struct TrickplayJob {
+	int gateIndex, sheetIndex, generation;
+	std::string itemId;
+	jfp::TrickplayInfo info;
+};
+struct TrickplaySheetState {
+	int sheetIndex, state; // 1 queued or fetching, 2 ready, -1 unavailable
+};
+struct PlaybackExtrasRecord {
+	JfGatePlaybackExtras value{};
+	std::string itemId, mediaSourceId;
+	int generation{ 0 };
+	bool have{ false };
+};
+std::deque<PlaybackExtrasJob> playbackExtrasJobs;
+std::deque<TrickplayJob> trickplayJobs; // only the latest not-yet-started sheet is useful
+std::deque<JfGateTrickplayImage> trickplayReady;
+std::deque<TrickplaySheetState> trickplaySheetStates;
+PlaybackExtrasRecord playbackExtras;
+int playbackGeneration{ 0 };
+int currentPlaybackIndex{ -1 };
+int trickplayInFlightSheet{ -1 };
+int trickplayInFlightGeneration{ -1 };
 int browseCat{ -1 }, queueCat{ -1 };
 struct BrowseStep {
 	std::string id, name, type;
@@ -437,8 +480,8 @@ void sizeFor(Category &c, int total)
 	say("JFGATE: \"%s\" has %d titles", c.name.c_str(), total);
 }
 
-// One title of a list, from the server's record of it. `kind` is the category's: Continue Watching, Next Up and the
-// next-episode queue show an episode as its series (the poster and the name), a browsed season shows it as itself.
+// One title of a list, from the server's record of it. Continue Watching and Next Up name episodes for their
+// series and use the season poster; a browsed season shows the episode as itself.
 void parseEntry(Entry &e, json_object *o, int kind)
 {
 	e.id = jstr(o, "Id");
@@ -456,6 +499,8 @@ void parseEntry(Entry &e, json_object *o, int kind)
 	}
 	e.imageId = e.id;
 	e.imageTag = jstr(jget(o, "ImageTags"), "Primary");
+	e.fallbackImageId.clear();
+	e.fallbackImageTag.clear();
 	e.seriesId = jstr(o, "SeriesId");
 	e.childCount = static_cast<int>(jint(o, "ChildCount"));
 	e.backdropId = e.id;
@@ -477,7 +522,7 @@ void parseEntry(Entry &e, json_object *o, int kind)
 			std::snprintf(line, sizeof(line), "S%lld  E%lld", jint(o, "ParentIndexNumber"), jint(o, "IndexNumber"));
 			e.genre = line;
 		} else {
-			// elsewhere an episode is shown as its series' poster, under the series' name
+			// elsewhere an episode is shown under the series' name
 			std::snprintf(line, sizeof(line), "S%lldE%lld  %s", jint(o, "ParentIndexNumber"), jint(o, "IndexNumber"),
 				e.name.c_str());
 			e.genre = line;
@@ -494,6 +539,12 @@ void parseEntry(Entry &e, json_object *o, int kind)
 		} else if (!seriesId.empty() && !seriesTag.empty()) {
 			e.imageId = seriesId;
 			e.imageTag = seriesTag;
+		}
+		if ((kind == kResume || kind == kNextUp) && !seasonId.empty()) {
+			e.fallbackImageId = e.imageId;
+			e.fallbackImageTag = e.imageTag;
+			e.imageId = seasonId;
+			e.imageTag = "season";
 		}
 	} else if (e.kind == "Season") {
 		const std::string series = jstr(o, "SeriesName");
@@ -650,7 +701,7 @@ void countLetters(int cat)
 
 bool fetchPoster(const JfSession &session, int cat, int pos, const Params &p)
 {
-	std::string id, tag, name;
+	std::string id, tag, name, fallbackId, fallbackTag;
 	{
 		std::lock_guard<std::mutex> guard(lock);
 		const Category &c = *cats[static_cast<size_t>(cat)];
@@ -661,18 +712,28 @@ bool fetchPoster(const JfSession &session, int cat, int pos, const Params &p)
 		id = e.imageId;
 		tag = e.imageTag;
 		name = e.name;
+		fallbackId = e.fallbackImageId;
+		fallbackTag = e.fallbackImageTag;
 	}
 	char auth[4096];
 	authorization(session, auth, sizeof(auth));
-	char path[512];
-	std::snprintf(path, sizeof(path),
-		"/Items/%s/Images/Primary?tag=%s&maxWidth=400&maxHeight=600&quality=85&format=Jpg", id.c_str(), tag.c_str());
-
 	HttpBinaryResponse response;
-	std::memset(&response, 0, sizeof(response));
-	if (http_get_binary(jfconf::host(), jfconf::port(), path, auth, &response) != 0) {
-		say("JFGATE: poster request failed for \"%s\"", name.c_str());
-		return false;
+	for (;;) {
+		char path[512];
+		std::snprintf(path, sizeof(path),
+			"/Items/%s/Images/Primary?tag=%s&maxWidth=400&maxHeight=600&quality=85&format=Jpg", id.c_str(), tag.c_str());
+		std::memset(&response, 0, sizeof(response));
+		if (http_get_binary(jfconf::host(), jfconf::port(), path, auth, &response) != 0) {
+			say("JFGATE: poster request failed for \"%s\"", name.c_str());
+			return false;
+		}
+		if (response.status != 404 || fallbackId.empty() || fallbackTag.empty() || fallbackId == id)
+			break;
+		say("JFGATE: season poster missing for \"%s\"; trying the previous poster", name.c_str());
+		http_binary_response_free(&response);
+		id = std::move(fallbackId);
+		tag = std::move(fallbackTag);
+		fallbackId.clear();
 	}
 	if (response.status != 200 || !response.data || response.size == 0) {
 		say("JFGATE: poster for \"%s\": HTTP %d, %zu bytes", name.c_str(), response.status, response.size);
@@ -897,6 +958,173 @@ void fetchDetails(const JfSession &session, const std::string &id)
 	} else {
 		record.state = 2;
 	}
+}
+
+void removeTrickplayStateLocked(int sheetIndex)
+{
+	for (size_t i = 0; i < trickplaySheetStates.size();) {
+		if (trickplaySheetStates[i].sheetIndex == sheetIndex) {
+			trickplaySheetStates.erase(trickplaySheetStates.begin() + static_cast<std::ptrdiff_t>(i));
+		} else {
+			++i;
+		}
+	}
+}
+
+int trickplayStateLocked(int sheetIndex)
+{
+	for (size_t i = 0; i < trickplaySheetStates.size(); ++i) {
+		if (trickplaySheetStates[i].sheetIndex == sheetIndex) {
+			const TrickplaySheetState state = trickplaySheetStates[i];
+			trickplaySheetStates.erase(trickplaySheetStates.begin() + static_cast<std::ptrdiff_t>(i));
+			trickplaySheetStates.push_back(state);
+			return state.state;
+		}
+	}
+	return 0;
+}
+
+void setTrickplayStateLocked(int sheetIndex, int state)
+{
+	removeTrickplayStateLocked(sheetIndex);
+	if (state == 0) {
+		return;
+	}
+	trickplaySheetStates.push_back({ sheetIndex, state });
+	while (trickplaySheetStates.size() > 8) {
+		auto oldest = trickplaySheetStates.begin();
+		for (; oldest != trickplaySheetStates.end(); ++oldest) {
+			const int candidate = oldest->sheetIndex;
+			const bool inFlight = trickplayInFlightGeneration == playbackGeneration && trickplayInFlightSheet == candidate;
+			const bool queued = std::any_of(trickplayJobs.begin(), trickplayJobs.end(),
+				[candidate](const TrickplayJob &job) { return job.sheetIndex == candidate; });
+			if (!inFlight && !queued) {
+				break;
+			}
+		}
+		if (oldest == trickplaySheetStates.end()) {
+			break;
+		}
+		trickplaySheetStates.erase(oldest);
+	}
+}
+
+void fetchPlaybackExtras(const JfSession &session, const PlaybackExtrasJob &job)
+{
+	JfGatePlaybackExtras result{};
+	result.gate_index = job.gateIndex;
+	result.state = 1;
+
+	const std::string segmentPath = "/MediaSegments/" + job.itemId;
+	json_object *segments = getJson(session, segmentPath.c_str());
+	jfp::Segment intro{};
+	if (segments && jfp::parseMediaSegment(segments, "Intro", &intro)) {
+		result.has_intro = 1;
+		result.intro_start = intro.start;
+		result.intro_end = intro.end;
+	}
+	jfp::Segment outro{};
+	if (segments && jfp::parseMediaSegment(segments, "Outro", &outro)) {
+		result.has_outro = 1;
+		result.outro_start = outro.start;
+		result.outro_end = outro.end;
+	}
+	if (segments) {
+		json_object_put(segments);
+	}
+
+	const std::string itemPath = "/Items?userId=" + urlEncode(session.user_id) + "&ids=" + urlEncode(job.itemId) +
+		"&recursive=true&fields=Trickplay";
+	json_object *items = getJson(session, itemPath.c_str());
+	jfp::TrickplayInfo trickplay{};
+	if (items && jfp::parseTrickplayResponse(items, job.itemId, job.mediaSourceId, &trickplay)) {
+		result.trickplay_width = trickplay.width;
+		result.trickplay_height = trickplay.height;
+		result.trickplay_tile_width = trickplay.tileWidth;
+		result.trickplay_tile_height = trickplay.tileHeight;
+		result.trickplay_count = trickplay.thumbnailCount;
+		result.trickplay_interval = trickplay.interval;
+		std::snprintf(result.trickplay_media_source_id, sizeof(result.trickplay_media_source_id), "%s",
+			trickplay.mediaSourceId.c_str());
+		say("JFGATE: trickplay available: %dx%d, %d thumbnails, %.2fs interval",
+			trickplay.width, trickplay.height, trickplay.thumbnailCount, trickplay.interval);
+	} else if (items) {
+		say("JFGATE: trickplay metadata unavailable for the playing item");
+	}
+	if (items) {
+		json_object_put(items);
+	}
+
+	std::lock_guard<std::mutex> guard(lock);
+	if (job.generation == playbackGeneration && job.gateIndex == currentPlaybackIndex &&
+		playbackExtras.have && playbackExtras.generation == job.generation &&
+		playbackExtras.itemId == job.itemId && playbackExtras.mediaSourceId == job.mediaSourceId) {
+		playbackExtras.value = result;
+	}
+}
+
+void fetchTrickplaySheet(const JfSession &session, const TrickplayJob &job)
+{
+	constexpr size_t kMaxEncodedBytes = 12u * 1024u * 1024u;
+	const int perSheet = job.info.tileWidth * job.info.tileHeight;
+	const int first = job.sheetIndex * perSheet;
+	const int held = std::min(perSheet, job.info.thumbnailCount - first);
+	const int columns = std::min(job.info.tileWidth, held);
+	const int rows = (held + job.info.tileWidth - 1) / job.info.tileWidth;
+	const int expectedWidth = job.info.width * columns;
+	const int expectedHeight = job.info.height * rows;
+	const int fullWidth = job.info.width * job.info.tileWidth;
+	const int fullHeight = job.info.height * job.info.tileHeight;
+	const std::string path = "/Videos/" + job.itemId + "/Trickplay/" + std::to_string(job.info.width) + "/" +
+		std::to_string(job.sheetIndex) + ".jpg?MediaSourceId=" + urlEncode(job.info.mediaSourceId) +
+		"&ApiKey=" + urlEncode(session.access_token);
+	char auth[4096];
+	authorization(session, auth, sizeof(auth));
+	HttpBinaryResponse response{};
+	unsigned char *pixels = nullptr;
+	int width = 0, height = 0, channels = 0;
+	if (http_get_binary_limited(jfconf::host(), jfconf::port(), path.c_str(), auth, kMaxEncodedBytes, &response) == 0) {
+		if (response.status != 200) {
+			say("JFGATE: trickplay sheet HTTP %d", response.status);
+		} else if (!response.data || response.size == 0 ||
+			response.size > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+			!stbi_info_from_memory(response.data, static_cast<int>(response.size), &width, &height, &channels)) {
+			say("JFGATE: trickplay sheet is empty or has an invalid image header");
+		} else if (!((width == expectedWidth && height == expectedHeight) || (width == fullWidth && height == fullHeight))) {
+			say("JFGATE: trickplay sheet has unexpected dimensions: %dx%d", width, height);
+		} else {
+			pixels = stbi_load_from_memory(response.data, static_cast<int>(response.size), &width, &height, &channels, 4);
+			if (!pixels) {
+				say("JFGATE: trickplay sheet image decoding failed");
+			}
+		}
+		http_binary_response_free(&response);
+	} else {
+		say("JFGATE: trickplay sheet request failed");
+	}
+
+	std::lock_guard<std::mutex> guard(lock);
+	if (trickplayInFlightGeneration == job.generation && trickplayInFlightSheet == job.sheetIndex) {
+		trickplayInFlightGeneration = -1;
+		trickplayInFlightSheet = -1;
+	}
+	if (job.generation != playbackGeneration || job.gateIndex != currentPlaybackIndex ||
+		!playbackExtras.have || playbackExtras.generation != job.generation || !pixels) {
+		std::free(pixels);
+		if (job.generation == playbackGeneration && job.gateIndex == currentPlaybackIndex && !pixels) {
+			setTrickplayStateLocked(job.sheetIndex, -1);
+		}
+		return;
+	}
+
+	while (trickplayReady.size() >= 1) {
+		const JfGateTrickplayImage stale = trickplayReady.front();
+		trickplayReady.pop_front();
+		std::free(stale.rgba);
+		setTrickplayStateLocked(stale.sheet_index, 0);
+	}
+	trickplayReady.push_back({ job.gateIndex, job.sheetIndex, width, height, pixels });
+	setTrickplayStateLocked(job.sheetIndex, 2);
 }
 
 
@@ -1156,10 +1384,19 @@ void fetchNext(const JfSession &session, const NextJob &job)
 			}
 		}
 	}
-	if (found >= 0 && found + 1 < count && queueCat >= 0) {
-		json_object *o = json_object_array_get_idx(array, static_cast<size_t>(found + 1));
-		{
-			std::lock_guard<std::mutex> guard(lock);
+	{
+		std::lock_guard<std::mutex> guard(lock);
+		if (job.serial != nextSerial) {
+			if (root) {
+				json_object_put(root);
+			}
+			return;
+		}
+		if (!array || !json_object_is_type(array, json_type_array) || found < 0 || queueCat < 0) {
+			say("JFGATE: could not find the current episode in the series response");
+			nextState.store(-2);
+		} else if (found + 1 < count) {
+			json_object *o = json_object_array_get_idx(array, static_cast<size_t>(found + 1));
 			startOver(queueCat);
 			Category &q = *cats[static_cast<size_t>(queueCat)];
 			q.total = 1;
@@ -1170,12 +1407,12 @@ void fetchNext(const JfSession &session, const NextJob &job)
 			q.posterState.assign(1, 2);
 			q.pagesIn = 1;
 			say("JFGATE: the episode after this one: \"%s\"", q.entries[0].genre.c_str());
+			nextIndex.store(queueCat * JF_GATE_STRIDE);
+			nextState.store(2);
+		} else {
+			say("JFGATE: no episode after this one (%d of %d)", found + 1, count);
+			nextState.store(-1);
 		}
-		nextIndex.store(queueCat * JF_GATE_STRIDE);
-		nextState.store(2);
-	} else {
-		say("JFGATE: no episode after this one (%d of %d)", found + 1, count);
-		nextState.store(-1);
 	}
 	if (root) {
 		json_object_put(root);
@@ -1771,13 +2008,33 @@ void run()
 		// what the player and the screen are waiting for comes first, even while a film plays
 		FavouriteJob job;
 		bool haveJob = false;
+		WatchedJob watchedJob;
+		bool haveWatched = false;
 		std::string detailsId, seasonsId;
+		PlaybackExtrasJob extrasJob{};
+		bool haveExtras = false;
+		TrickplayJob trickplayJob{};
+		bool haveTrickplay = false;
 		SeasonPosterJob posterJob;
 		NextJob nextJob;
 		bool haveNext = false;
 		{
 			std::lock_guard<std::mutex> guard(lock);
-			if (!favouriteJobs.empty()) {
+			if (!playbackExtrasJobs.empty()) {
+				extrasJob = playbackExtrasJobs.front();
+				playbackExtrasJobs.pop_front();
+				haveExtras = true;
+			} else if (!trickplayJobs.empty()) {
+				trickplayJob = std::move(trickplayJobs.front());
+				trickplayJobs.pop_front();
+				trickplayInFlightGeneration = trickplayJob.generation;
+				trickplayInFlightSheet = trickplayJob.sheetIndex;
+				haveTrickplay = true;
+			} else if (!watchedJobs.empty()) {
+				watchedJob = std::move(watchedJobs.front());
+				watchedJobs.pop_front();
+				haveWatched = true;
+			} else if (!favouriteJobs.empty()) {
 				job = favouriteJobs.front();
 				favouriteJobs.pop_front();
 				haveJob = true;
@@ -1795,6 +2052,39 @@ void run()
 				nextJobs.pop_front();
 				haveNext = true;
 			}
+		}
+		if (haveExtras) {
+			fetchPlaybackExtras(session, extrasJob);
+			continue;
+		}
+		if (haveTrickplay) {
+			fetchTrickplaySheet(session, trickplayJob);
+			continue;
+		}
+		if (haveWatched) {
+			const bool success = (watchedJob.watched ? jf_mark_played(&session, watchedJob.id.c_str())
+			                                         : jf_mark_unplayed(&session, watchedJob.id.c_str())) == 0;
+			if (!success)
+				say("JFGATE: could not update watched status: %s", jf_last_error());
+			std::lock_guard<std::mutex> guard(lock);
+			if (success) {
+				seasonCache.clear();
+				for (const auto &category : cats) {
+					for (Entry &entry : category->entries) {
+						if (entry.id == watchedJob.id) {
+							entry.played = watchedJob.watched;
+							entry.position = 0;
+						}
+					}
+				}
+			}
+			JfGateWatchedResult result{};
+			std::snprintf(result.item_id, sizeof(result.item_id), "%s", watchedJob.id.c_str());
+			result.watched = watchedJob.watched ? 1 : 0;
+			result.success = success ? 1 : 0;
+			watchedResults.push_back(result);
+			watchedPending.erase(watchedJob.id);
+			continue;
 		}
 		if (haveJob) {
 			sendFavourite(session, job);
@@ -2039,6 +2329,36 @@ extern "C" void jf_gate_set_favorite(int gateIndex, int on)
 	favouriteJobs.push_back(FavouriteJob{ e.id, on != 0 });
 }
 
+extern "C" int jf_gate_set_watched(int gateIndex, int watched)
+{
+	int cat, pos;
+	if (!sessionReady.load(std::memory_order_acquire) || !locate(gateIndex, &cat, &pos))
+		return 0;
+	std::lock_guard<std::mutex> guard(lock);
+	Category &c = *cats[static_cast<size_t>(cat)];
+	if (c.total < 0 || static_cast<size_t>(pos) >= c.entries.size())
+		return 0;
+	const Entry &entry = c.entries[static_cast<size_t>(pos)];
+	if (entry.id.empty() || entry.id.size() >= sizeof(JfGateWatchedResult::item_id) ||
+	    (entry.kind != "Movie" && entry.kind != "Episode") || watchedPending.count(entry.id))
+		return 0;
+	watchedPending.insert(entry.id);
+	watchedJobs.push_back({entry.id, watched != 0});
+	return 1;
+}
+
+extern "C" int jf_gate_take_watched_result(JfGateWatchedResult *out)
+{
+	if (!out)
+		return 0;
+	std::lock_guard<std::mutex> guard(lock);
+	if (watchedResults.empty())
+		return 0;
+	*out = watchedResults.front();
+	watchedResults.pop_front();
+	return 1;
+}
+
 extern "C" void jf_gate_want(int category, int centre)
 {
 	wantCategory.store(category);
@@ -2073,6 +2393,7 @@ extern "C" int jf_gate_item_meta(int gateIndex, JfGateMeta *out)
 		return 0;
 	}
 	const Entry &e = c.entries[static_cast<size_t>(pos)];
+	out->id = e.id.c_str();
 	out->name = e.name.c_str();
 	out->kind = e.kind.c_str();
 	out->overview = e.overview.c_str();
@@ -2085,6 +2406,7 @@ extern "C" int jf_gate_item_meta(int gateIndex, JfGateMeta *out)
 	out->favorite = e.favorite ? 1 : 0;
 	out->has_poster = e.imageTag.empty() ? 0 : 1;
 	out->watched = e.played ? 1 : 0;
+	out->watched_pending = watchedPending.count(e.id) ? 1 : 0;
 	out->added_days = e.addedDays;
 	out->child_count = e.childCount;
 	return 1;
@@ -2232,6 +2554,9 @@ extern "C" int jf_gate_signout(int forget_server)
 		ready.clear();
 		cats.clear();
 		favouriteJobs.clear();
+		watchedJobs.clear();
+		watchedResults.clear();
+		watchedPending.clear();
 		detailsCache.clear();
 		detailsOrder.clear();
 		detailsJobs.clear();
@@ -2240,6 +2565,7 @@ extern "C" int jf_gate_signout(int forget_server)
 		seasonPosterJobs.clear();
 		seasonPosterQueued.clear();
 		nextJobs.clear();
+		++nextSerial;
 		browseStack.clear();
 		if (avatarWaiting) {
 			std::free(avatarPicture.rgba);
@@ -2438,6 +2764,126 @@ bool jf_gate_session(JfSession *out)
 	}
 	*out = gSession;
 	return true;
+}
+
+extern "C" void jf_gate_playback_extras_request(int gateIndex, const char *itemId, const char *mediaSourceId)
+{
+	if (gateIndex < 0 || !itemId || !*itemId) {
+		return;
+	}
+	std::lock_guard<std::mutex> guard(lock);
+	if (currentPlaybackIndex >= 0 && currentPlaybackIndex != gateIndex) {
+		return;
+	}
+	const std::string source = mediaSourceId ? mediaSourceId : "";
+	if (playbackExtras.have && playbackExtras.value.gate_index == gateIndex &&
+		playbackExtras.itemId == itemId && playbackExtras.mediaSourceId == source) {
+		return;
+	}
+	currentPlaybackIndex = gateIndex;
+	playbackExtrasJobs.clear();
+	trickplayJobs.clear();
+	trickplaySheetStates.clear();
+	for (const JfGateTrickplayImage &image : trickplayReady) {
+		std::free(image.rgba);
+	}
+	trickplayReady.clear();
+	++playbackGeneration;
+	playbackExtras = {};
+	playbackExtras.have = true;
+	playbackExtras.generation = playbackGeneration;
+	playbackExtras.itemId = itemId;
+	playbackExtras.mediaSourceId = source;
+	playbackExtras.value.gate_index = gateIndex;
+	playbackExtras.value.state = 0;
+	playbackExtrasJobs.push_back({ gateIndex, itemId, source, playbackGeneration });
+}
+
+extern "C" int jf_gate_playback_extras_get(int gateIndex, JfGatePlaybackExtras *out)
+{
+	if (!out) {
+		return 0;
+	}
+	std::lock_guard<std::mutex> guard(lock);
+	if (!playbackExtras.have || playbackExtras.value.gate_index != gateIndex) {
+		return 0;
+	}
+	*out = playbackExtras.value;
+	return 1;
+}
+
+extern "C" void jf_gate_playback_extras_clear(void)
+{
+	std::lock_guard<std::mutex> guard(lock);
+	++playbackGeneration;
+	currentPlaybackIndex = -1;
+	playbackExtras = {};
+	playbackExtrasJobs.clear();
+	trickplayJobs.clear();
+	trickplaySheetStates.clear();
+	trickplayInFlightSheet = -1;
+	trickplayInFlightGeneration = -1;
+	for (const JfGateTrickplayImage &image : trickplayReady) {
+		std::free(image.rgba);
+	}
+	trickplayReady.clear();
+}
+
+extern "C" void jf_gate_trickplay_request(int gateIndex, int sheetIndex)
+{
+	if (sheetIndex < 0) {
+		return;
+	}
+	std::lock_guard<std::mutex> guard(lock);
+	if (!playbackExtras.have || playbackExtras.value.state != 1 ||
+		playbackExtras.value.gate_index != gateIndex || currentPlaybackIndex != gateIndex) {
+		return;
+	}
+	jfp::TrickplayInfo info;
+	info.width = playbackExtras.value.trickplay_width;
+	info.height = playbackExtras.value.trickplay_height;
+	info.tileWidth = playbackExtras.value.trickplay_tile_width;
+	info.tileHeight = playbackExtras.value.trickplay_tile_height;
+	info.thumbnailCount = playbackExtras.value.trickplay_count;
+	info.interval = playbackExtras.value.trickplay_interval;
+	info.mediaSourceId = playbackExtras.value.trickplay_media_source_id;
+	if (!info.valid()) {
+		return;
+	}
+	const int perSheet = info.tileWidth * info.tileHeight;
+	const int sheetCount = (info.thumbnailCount + perSheet - 1) / perSheet;
+	if (sheetIndex >= sheetCount || trickplayStateLocked(sheetIndex) != 0) {
+		return;
+	}
+	if (!trickplayJobs.empty()) {
+		removeTrickplayStateLocked(trickplayJobs.front().sheetIndex);
+		trickplayJobs.clear();
+	}
+	setTrickplayStateLocked(sheetIndex, 1);
+	trickplayJobs.push_back({ gateIndex, sheetIndex, playbackGeneration, playbackExtras.itemId, std::move(info) });
+}
+
+extern "C" int jf_gate_trickplay_take(JfGateTrickplayImage *out)
+{
+	if (!out) {
+		return 0;
+	}
+	std::lock_guard<std::mutex> guard(lock);
+	if (trickplayReady.empty()) {
+		return 0;
+	}
+	*out = trickplayReady.front();
+	trickplayReady.pop_front();
+	return 1;
+}
+
+extern "C" void jf_gate_trickplay_forget(int gateIndex, int sheetIndex)
+{
+	std::lock_guard<std::mutex> guard(lock);
+	if (currentPlaybackIndex == gateIndex &&
+		!(trickplayInFlightGeneration == playbackGeneration && trickplayInFlightSheet == sheetIndex)) {
+		removeTrickplayStateLocked(sheetIndex);
+	}
 }
 
 const char *jf_gate_item_id(int index)
@@ -2650,24 +3096,25 @@ extern "C" int jf_gate_browse_back(void)
 extern "C" void jf_gate_next_request(int gateIndex)
 {
 	int cat, pos;
+	std::lock_guard<std::mutex> guard(lock);
+	++nextSerial;
+	nextJobs.clear();
 	nextIndex.store(-1);
 	if (!locate(gateIndex, &cat, &pos)) {
-		nextState.store(-1);
+		nextState.store(-2);
 		return;
 	}
-	std::lock_guard<std::mutex> guard(lock);
 	const Category &c = *cats[static_cast<size_t>(cat)];
 	if (c.total < 0 || static_cast<size_t>(pos) >= c.entries.size()) {
-		nextState.store(-1);
+		nextState.store(-2);
 		return;
 	}
 	const Entry &e = c.entries[static_cast<size_t>(pos)];
 	if (e.kind != "Episode" || e.seriesId.empty()) {
-		nextState.store(-1);
+		nextState.store(-2);
 		return;
 	}
-	nextJobs.clear();
-	nextJobs.push_back(NextJob{ e.seriesId, e.id });
+	nextJobs.push_back(NextJob{ e.seriesId, e.id, nextSerial });
 	nextState.store(1);
 }
 
@@ -2684,6 +3131,7 @@ extern "C" int jf_gate_next_index(void)
 extern "C" void jf_gate_next_cancel(void)
 {
 	std::lock_guard<std::mutex> guard(lock);
+	++nextSerial;
 	nextJobs.clear();
 	nextState.store(0);
 	nextIndex.store(-1);

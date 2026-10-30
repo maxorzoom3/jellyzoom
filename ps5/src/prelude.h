@@ -18,10 +18,13 @@
 #include <assert.h>
 #include <atomic>
 #include <chrono>
+#include <cctype>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <exception>
 #include <format>
 #include <fstream>
@@ -43,8 +46,16 @@
 #include <string.h>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <json-c/json.h>
 
 #include "vulkanexamplebase.h"
 #include "VulkanglTFModel.h"
@@ -67,5 +78,6 @@
 #include "jf/jf_gate.h"
 #include "jf_library.hpp"
 #include "jf/jf_player.h"
+#include "jf/jf_playback_features.h"
 #include "ui/components/media_controls.hpp"
 #include "jf/jf_qr.hpp"
