@@ -47,7 +47,8 @@ Vulkan and made for the TV, and video played from your own server with HDR and y
 **Browsing**
 - Sign-in by server list or typed address, then by user and password, or **Quick Connect** (scan the code, tap *Authorize*)
 - Libraries as a cover wheel you turn with the stick or the D-pad: films, shows, seasons and episodes
-- Continue watching, next up, favourites (△ on a title) and search (✕ on the search button) across your libraries
+- Continue watching, next up, favourites (△ on a title) and search (✕ on the search button) across your libraries;
+  episodes in Continue Watching and Next Up use their season posters when available
 - A glass look throughout, with sound effects and music from the UI kit
 
 **Playback**
@@ -127,9 +128,17 @@ Nothing else on the console is touched.
 | D-pad / left stick | Move | Move on the control bar |
 | △ | Favourite the highlighted title | Audio and subtitles |
 | L2 / R2 | | Scrub back / forward |
-| L1 / R1 | | HDR brightness |
+| L1 / R1 | Switch main sections | HDR brightness |
 | Options | | Playback info |
 | Hold Options (1 s) | Leave to the menu | Leave to the menu |
+
+On a movie or episode's details page, use **Mark as** to mark it watched or unwatched.
+From a season's episode list, press Options to open that episode's details. Changing the watch status clears its
+resume position.
+
+When an intro skip prompt appears at the lower right, press Triangle or TV-remote OK to skip. The prompt fills and
+hides after eight seconds of playback; bring up the playback controls to show it again while the intro is still playing.
+Skipping does not wake hidden playback controls. Outro prompts use the same position and controls.
 
 ## Seerr (optional)
 

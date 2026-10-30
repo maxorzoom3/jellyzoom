@@ -59,6 +59,15 @@ void jf_gate_search(const char *term);
 /* Makes a title a favourite, or not, on the server too. */
 void jf_gate_set_favorite(int gate_index, int on);
 
+typedef struct {
+	char item_id[128];
+	int watched;
+	int success;
+} JfGateWatchedResult;
+/* Returns 1 if queued, 0 if the item is invalid or already being updated. */
+int jf_gate_set_watched(int gate_index, int watched);
+int jf_gate_take_watched_result(JfGateWatchedResult *out);
+
 /* Where the screen is looking: the worker fetches around it first. */
 void jf_gate_want(int category, int centre);
 /* 1 while a film plays: the worker waits, so the stream has the network. */
@@ -69,6 +78,7 @@ int jf_gate_page_loaded(int category, int page);
 
 /* What the server said about one title. The strings stay valid until its category starts over. */
 typedef struct {
+	const char *id;
 	const char *name;
 	const char *kind; /* Movie, Series, BoxSet, Episode... */
 	const char *overview;
@@ -81,6 +91,7 @@ typedef struct {
 	int favorite;
 	int has_poster;
 	int watched; /* the server's played flag */
+	int watched_pending;
 	int added_days; /* days since it was added to the server; -1 if unknown */
 	int child_count; /* a series: its seasons; a season: its episodes; a collection: its titles; else 0 */
 } JfGateMeta;
@@ -139,6 +150,41 @@ int jf_gate_details_request(int gate_index);
 /* Copies them out: 1 when here, 0 while loading, -1 when failed. */
 int jf_gate_details_get(int gate_index, JfGateDetails *out);
 
+/* Metadata and already-generated trickplay sheets for the currently playing item. */
+typedef struct {
+	int gate_index;
+	int state; /* 0 loading, 1 complete; absent or invalid optional metadata is not an error */
+	int has_intro;
+	double intro_start;
+	double intro_end;
+	int has_outro;
+	double outro_start;
+	double outro_end;
+	int trickplay_width;
+	int trickplay_height;
+	int trickplay_tile_width;
+	int trickplay_tile_height;
+	int trickplay_count;
+	double trickplay_interval;
+	char trickplay_media_source_id[128];
+} JfGatePlaybackExtras;
+
+typedef struct {
+	int gate_index;
+	int sheet_index;
+	int width;
+	int height;
+	unsigned char *rgba; /* malloc-owned; the caller frees it */
+} JfGateTrickplayImage;
+
+void jf_gate_playback_extras_request(int gate_index, const char *item_id, const char *media_source_id);
+int jf_gate_playback_extras_get(int gate_index, JfGatePlaybackExtras *out);
+void jf_gate_playback_extras_clear(void);
+void jf_gate_trickplay_request(int gate_index, int sheet_index);
+int jf_gate_trickplay_take(JfGateTrickplayImage *out);
+void jf_gate_trickplay_forget(int gate_index, int sheet_index);
+
+
 /* ---- inside a title: a series' seasons, a season's episodes, a collection's titles ----
  * The children are listed by one more category (kind 6) that has no tab. Opening a title there starts it over. */
 /* Lists the children of the title at this gate index; returns the category that holds them, or -1. */
@@ -163,7 +209,7 @@ int jf_gate_browse_back(void);
 
 /* ---- the episode after the one that played ---- */
 void jf_gate_next_request(int gate_index);
-int jf_gate_next_state(void); /* 0 idle, 1 asking, 2 ready, -1 there is none */
+int jf_gate_next_state(void); /* 0 idle, 1 asking, 2 ready, -1 there is none, -2 lookup failed */
 int jf_gate_next_index(void); /* its gate index (a one-title category, kind 7), when ready */
 void jf_gate_next_cancel(void);
 

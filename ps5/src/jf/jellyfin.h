@@ -28,4 +28,7 @@ int jf_report_stopped(
     const JfPlayback *playback,
     int64_t position_ticks);
 
+int jf_mark_played(const JfSession *session, const char *item_id);
+int jf_mark_unplayed(const JfSession *session, const char *item_id);
+
 const char *jf_last_error(void);

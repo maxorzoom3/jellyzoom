@@ -28,11 +28,24 @@ int http_post_json(const char *host,
                    const char *json,
                    HttpResponse *out);
 
+int http_delete(const char *host,
+                int port,
+                const char *path,
+                const char *authorization,
+                HttpResponse *out);
+
 int http_get_binary(const char *host,
                     int port,
                     const char *path,
                     const char *authorization,
                     HttpBinaryResponse *out);
+
+int http_get_binary_limited(const char *host,
+                            int port,
+                            const char *path,
+                            const char *authorization,
+                            size_t max_body_size,
+                            HttpBinaryResponse *out);
 
 void http_response_free(HttpResponse *r);
 void http_binary_response_free(HttpBinaryResponse *r);

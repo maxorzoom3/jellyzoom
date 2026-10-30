@@ -107,7 +107,28 @@ hui::InputFrame Kit::input()
 		const pad_reading &r = readings[i];
 		samples_[i] = { r.buttons, r.left_x, r.left_y, r.right_x, r.right_y, r.l2, r.r2, r.connected, r.timestamp_us };
 	}
-	return tracker.update(std::span<const hui::PadSample>(samples_), (std::uint64_t)(now_seconds() * 1e6));
+	const std::uint64_t now = (std::uint64_t)(now_seconds() * 1e6);
+	hui::InputFrame input = tracker.update(std::span<const hui::PadSample>(samples_), now);
+	const int remoteCount = remote_readings(&readings);
+	samples_.resize(remoteCount);
+	for (int i = 0; i < remoteCount; i++) {
+		const pad_reading &r = readings[i];
+		samples_[i] = { r.buttons, r.left_x, r.left_y, r.right_x, r.right_y, r.l2, r.r2, r.connected, r.timestamp_us };
+	}
+	const hui::InputFrame remote = remote_tracker_.update(std::span<const hui::PadSample>(samples_), now);
+	remote_confirm_pressed_ = remote.is_pressed(hui::Action::confirm);
+	input.pressed |= remote.pressed & ~input.held;
+	input.released = (input.released | remote.released) & ~(input.held | remote.held);
+	input.held |= remote.held;
+	if (input.nav == hui::Direction::none && remote.nav != hui::Direction::none) {
+		input.nav = remote.nav;
+		input.nav_repeat = remote.nav_repeat;
+		input.nav_from_stick = false;
+	}
+	input.trigger_l = std::max(input.trigger_l, remote.trigger_l);
+	input.trigger_r = std::max(input.trigger_r, remote.trigger_r);
+	input.connected = input.connected || remote.connected;
+	return input;
 }
 
 hui::InputFrame Kit::scripted(const char *program, uint32_t frame) const

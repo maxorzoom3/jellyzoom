@@ -33,7 +33,9 @@ int scePadInit(void);
 int scePadOpen(int32_t user_id, int32_t port_type, int32_t index, const void *params);
 int scePadGetHandle(int32_t user_id, int32_t port_type, int32_t index);
 int scePadRead(int32_t handle, void *samples, int32_t capacity);
+int scePadReadState(int32_t handle, void *sample);
 int scePadClose(int32_t handle);
+int sceSystemServiceGetStatus(void *status);
 int scePadSetVibrationMode(int32_t handle, int32_t mode);
 int scePadSetVibration(int32_t handle, const void *vibration);
 int scePadSetLightBar(int32_t handle, const void *color);
@@ -130,6 +132,147 @@ static double pad_next_scan;
 /* A user whose controller would not open, said once rather than every scan. */
 static int32_t pad_unopened = -1;
 #define PAD_SCAN_SECONDS 1.0
+
+static int32_t remote_handle = -1;
+static struct pad_reading remote_taken[65];
+static int remote_count;
+static uint32_t remote_ignore, remote_last, remote_media;
+static uint64_t remote_timestamp;
+enum { REMOTE_RAW_PLAY = 0x01000000u, REMOTE_RAW_PAUSE = 0x02000000u, REMOTE_RAW_TOGGLE = 0x04000000u };
+
+static uint32_t
+remote_buttons(const struct pad_sample *sample, bool system_has_screen)
+{
+   if (system_has_screen)
+      return 0;
+   const uint32_t supported = PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT | PAD_CROSS | PAD_CIRCLE |
+      PAD_SQUARE | PAD_TRIANGLE | PAD_OPTIONS | PAD_L1 | PAD_R1 | 0x00000300u;
+   uint32_t bits = sample->buttons & supported;
+   const uint8_t key = ((const uint8_t *)sample)[0x6c];
+   switch (key) {
+   case 13: bits |= PAD_CROSS; break;
+   case 15: bits |= PAD_CIRCLE; break;
+   case 18: case 27: bits |= PAD_OPTIONS; break;
+   case 22: bits |= REMOTE_RAW_PLAY; break;
+   case 26: bits |= REMOTE_RAW_PAUSE; break;
+   case 45: bits |= REMOTE_RAW_TOGGLE; break;
+   case 23: bits |= 0x00000100u; break;
+   case 24: bits |= 0x00000200u; break;
+   }
+   return bits;
+}
+
+static bool
+remote_system_has_screen(void)
+{
+   struct {
+      int32_t events;
+      uint8_t overlay, background;
+      uint8_t reserved[254];
+   } status = {0};
+   const int rc = sceSystemServiceGetStatus(&status);
+   if (rc != 0) {
+      static bool reported;
+      if (!reported) {
+         say("remote: could not read system input ownership (0x%08x)", (unsigned)rc);
+         reported = true;
+      }
+      return true;
+   }
+   return status.overlay != 0 || status.background != 0;
+}
+
+static void
+remote_open(void)
+{
+   remote_handle = scePadOpen(0xff, 16, 0, NULL);
+   if (remote_handle < 0) {
+      say("remote: HDMI-CEC input unavailable (0x%08x)", (unsigned)remote_handle);
+      return;
+   }
+   say("remote: HDMI-CEC input opened");
+   struct pad_sample sample = {0};
+   const int rc = scePadReadState(remote_handle, &sample);
+   if (rc == 0) {
+      remote_ignore = remote_buttons(&sample, remote_system_has_screen());
+      remote_last = 0;
+      remote_timestamp = sample.timestamp_us;
+   } else {
+      say("remote: initial state unavailable (0x%08x)", (unsigned)rc);
+   }
+}
+
+static void
+remote_add(const struct pad_sample *sample, bool system_has_screen)
+{
+   uint32_t bits = remote_buttons(sample, system_has_screen);
+   remote_ignore &= bits;
+   bits &= ~remote_ignore;
+   const uint32_t presses = bits & ~remote_last;
+   if (presses & REMOTE_RAW_PLAY) remote_media |= REMOTE_PLAY;
+   if (presses & REMOTE_RAW_PAUSE) remote_media |= REMOTE_PAUSE;
+   if (presses & REMOTE_RAW_TOGGLE) remote_media |= REMOTE_PLAY_PAUSE;
+   remote_last = bits;
+   const uint32_t buttons = bits & ~(REMOTE_RAW_PLAY | REMOTE_RAW_PAUSE | REMOTE_RAW_TOGGLE);
+   remote_taken[remote_count++] = (struct pad_reading){
+      buttons, 128, 128, 128, 128, (buttons & 0x100u) ? 153 : 0, (buttons & 0x200u) ? 153 : 0,
+      true, sample->timestamp_us};
+}
+
+static void
+remote_poll(void)
+{
+   remote_count = 0;
+   remote_media = 0;
+   if (remote_handle < 0)
+      return;
+   const bool system_has_screen = remote_system_has_screen();
+   struct pad_sample samples[64];
+   const int count = scePadRead(remote_handle, samples, 64);
+   if (count < 0) {
+      static bool reported;
+      if (!reported) {
+         say("remote: buffered read failed (0x%08x)", (unsigned)count);
+         reported = true;
+      }
+   }
+   for (int i = 0; i < count && i < 64; ++i) {
+      if (samples[i].timestamp_us && samples[i].timestamp_us < remote_timestamp)
+         continue;
+      if (samples[i].timestamp_us > remote_timestamp)
+         remote_timestamp = samples[i].timestamp_us;
+      remote_add(&samples[i], system_has_screen);
+   }
+   struct pad_sample current = {0};
+   const int rc = scePadReadState(remote_handle, &current);
+   if (rc == 0) {
+      if (!current.timestamp_us || current.timestamp_us >= remote_timestamp)
+         remote_add(&current, system_has_screen);
+   } else {
+      static bool reported;
+      if (!reported) {
+         say("remote: state read failed (0x%08x)", (unsigned)rc);
+         reported = true;
+      }
+      if (count < 0) {
+         current.buttons = PAD_INTERCEPTED;
+         remote_add(&current, true);
+      }
+   }
+}
+
+int
+remote_readings(const struct pad_reading **readings)
+{
+   *readings = remote_taken;
+   return remote_count;
+}
+
+uint32_t
+remote_media_pressed(void)
+{
+   return remote_media;
+}
 
 /* A player's state while they have a controller, else NULL (and always NULL
  * before pad_open has set the players up). */
@@ -231,6 +374,7 @@ pad_open(void)
       return false;
    }
    pad_service = true;
+   remote_open();
    const bool opened = pad_player_open(0, user, 10);
    pad_scan();
    pad_next_scan = now_seconds() + PAD_SCAN_SECONDS;
@@ -264,6 +408,7 @@ pad_fill(const struct pad_player_state *state, struct pad *pad)
 void
 pad_poll(struct pad *pad)
 {
+   remote_poll();
    if (pad_service && now_seconds() >= pad_next_scan) {
       pad_scan();
       pad_next_scan = now_seconds() + PAD_SCAN_SECONDS;

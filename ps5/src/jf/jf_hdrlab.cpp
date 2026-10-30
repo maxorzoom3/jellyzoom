@@ -139,11 +139,22 @@ bool setOutput(int handle, bool hdr, std::uint32_t width, std::uint32_t height)
 		}
 		return true;
 	}
-	// The title runs the output at 119.88 Hz (refresh code 13) when the display takes it; a 4K 119.88 Hz link has no room
-	// for 10-bit HDR on most displays, so the console may be refusing the format for that reason. Go to 59.94 Hz first.
 	OutputStatus st;
 	std::memset(&st, 0, sizeof(st));
-	sceVideoOutGetOutputStatus(handle, &st);
+	const int statusRc = sceVideoOutGetOutputStatus(handle, &st);
+	if (statusRc != 0) {
+		say("HDRLAB: could not read output status: rc=0x%08x", static_cast<unsigned>(statusRc));
+	}
+	if (st.refreshRate == 13 && access("/data/jf-hdr-60", F_OK) != 0) {
+		say("HDRLAB: trying HDR10 without leaving 119.88 Hz");
+		if (change("Bgr10A2Bt2100Pq at 119.88 Hz", kFormatHdr)) {
+			g_usedChange = true;
+			say("HDRLAB: 119.88 Hz HDR buffer accepted; check the display's actual signal");
+			return true;
+		}
+		say("HDRLAB: 119.88 Hz HDR buffer refused; trying the normal 59.94 Hz path");
+	}
+	// A refused HDR buffer or the compatibility flag uses the established 59.94 Hz path.
 	if (st.refreshRate == 13) {
 		const int rc = sceVideoOutConfigureOutput(handle, 1, nullptr, nullptr, nullptr);
 		say("HDRLAB: output was at 119.88 Hz (refresh code 13); going to 59.94 Hz: rc=0x%08x", static_cast<unsigned>(rc));

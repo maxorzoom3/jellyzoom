@@ -10,8 +10,7 @@
 //   - one wheel (a Shelf) for each Jellyfin library, and a row of tabs above them: press UP to
 //     move to the tabs, LEFT and RIGHT to change library, DOWN or CROSS to go back to the wheel.
 //     The old wheel slides up and out while the new one slides up from below;
-//   - L1 and R1 jump to the first title of the previous or next letter, using the A-Z offsets the
-//     server gave; a big letter shows what you landed on, and the scrub bar carries the letters;
+//   - L1 and R1 change the main sections; the A-Z picker moves within a library;
 //   - the wheel has the library's real length at once; titles and posters arrive as the worker
 //     thread fetches them around the wheel, and a dark card stands in until then;
 //   - the tabs also hold Continue Watching, Next Up, Recently Added and Favourites, and a Search tab:
@@ -48,6 +47,7 @@
 // jellyfin: the Cover Wheel reads jf::lists()
 #include "jf_library.hpp"
 #include "jf_gate.h"
+#include "jf_navigation.h"
 #include "jf_qr.hpp"
 
 #include "core/tween.hpp"
@@ -134,7 +134,7 @@ constexpr float kTabsMax = 1500.0f;  // the row is shrunk to fit this
 constexpr float kSlide = 900.0f;     // how far a wheel travels sideways while it leaves or arrives
 constexpr float kSlideTime = 0.55f;
 constexpr float kCueLift = 30.0f;    // the row's hop when the wheel gets the focus back
-constexpr float kLetterX = 140.0f;   // the big letter after an L1 / R1 jump
+constexpr float kLetterX = 140.0f;   // the big letter after a letter jump
 constexpr float kLetterSize = 150.0f;
 
 // ---- the caption and the scrub bar ----
@@ -767,6 +767,12 @@ class Shelf
     void play_episode(app::Feedback &feedback)
     {
         const ::jf::Item &it = item(current());
+        if (it.watchedPending)
+        {
+            feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+            ::jf::actionNotice() = "Wait for the watched status update to finish";
+            return;
+        }
         if (!it.ready || !it.playable)
         {
             feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
@@ -909,7 +915,7 @@ class Shelf
             else
                 refuse(direction, feedback);
         }
-        // L1 and R1: the first title of the previous or next letter
+        // The nested browse wheel retains its letter jumps.
         for (const int direction : {-1, 1})
         {
             if (input.is_pressed(direction < 0 ? Action::page_prev : Action::page_next))
@@ -1057,7 +1063,7 @@ class Shelf
         return it.playable && it.resumeSeconds > 1.0f;
     }
 
-    // The buttons that are on the page, left to right: 0 play or resume, 1 from start, 2 audio, 3 subtitles
+    // The buttons on the page: play, restart, audio, subtitles and watched status.
     int slots(int *ids) const
     {
         int n = 0;
@@ -1071,6 +1077,8 @@ class Shelf
             ids[n++] = 1;
         ids[n++] = 2;
         ids[n++] = 3;
+        if (item(opened_).kindRaw == "Movie" || item(opened_).kindRaw == "Episode")
+            ids[n++] = 4;
         return n;
     }
 
@@ -1082,6 +1090,12 @@ class Shelf
 
     void poll_seasons(float dt)
     {
+        if (is_series() && season_revision_ != ::jf::watchedRevision())
+        {
+            season_revision_ = ::jf::watchedRevision();
+            season_state_ = 0;
+            season_wait_ = 0.0f;
+        }
         if (!is_series() || season_state_ != 0)
             return;
         season_wait_ -= dt;
@@ -1301,7 +1315,7 @@ class Shelf
 
     void move_focus(Direction direction, app::Feedback &feedback)
     {
-        int ids[4];
+        int ids[5];
         const int n = slots(ids);
         int at = 0;
         for (int i = 0; i < n; ++i)
@@ -1343,6 +1357,12 @@ class Shelf
         {
         case 0:
         case 1:
+            if (it.watchedPending)
+            {
+                feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+                ::jf::actionNotice() = "Wait for the watched status update to finish";
+                return;
+            }
             if (!it.playable)
             {
                 // A series or a collection: look inside it
@@ -1371,9 +1391,25 @@ class Shelf
         case 2:
             open_picker(Modal::audio, feedback);
             break;
-        default:
+        case 3:
             open_picker(Modal::subs, feedback);
             break;
+        case 4:
+        {
+            ::jf::Item &current = *list_.items[static_cast<std::size_t>(opened_)];
+            if (current.watchedPending || !::jf_gate_set_watched(current.gateIndex, current.watched ? 0 : 1))
+            {
+                feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+                ::jf::actionNotice() = "Could not start watched status update";
+                return;
+            }
+            for (const auto &list : ::jf::lists())
+                for (const auto &other : list->items)
+                    if (other->id == current.id)
+                        other->watchedPending = true;
+            feedback.play(audio::Cue::open);
+            break;
+        }
         }
     }
 
@@ -2236,7 +2272,7 @@ class Shelf
         list.pop_opacity();
     }
 
-    // The big letter that says where an L1 / R1 jump landed.
+    // The big letter that says where a letter jump landed.
     void draw_letter(gfx::DrawList &list) const
     {
         if (letter_flash_ <= 0.01f)
@@ -2316,7 +2352,7 @@ class Shelf
 
     // A rounded button of the film's page: a small caption over a value
     void draw_pill(gfx::DrawList &list, const Rect &r, bool focus, bool enabled, const char *caption,
-                   const std::string &value, const Color &accent, float breath) const
+                   const std::string &value, const Color &accent, float breath, float value_size = 24.0f) const
     {
         const ui::Fonts &fonts = context_.fonts;
         const float a = enabled ? 1.0f : 0.5f;
@@ -2334,8 +2370,8 @@ class Shelf
         const Color ink = focus ? kInk : kWhite;
         ui::text(list, fonts.semibold, caption, r.x + 26.0f, r.y + 24.0f, 13, ink.with_alpha((focus ? 0.55f : 0.5f) * a),
                  gfx::Align::left, 3.0f);
-        const std::string fitted(fonts.semibold.font->fit(value.c_str(), 24, r.w - 52.0f));
-        ui::text(list, fonts.semibold, fitted.c_str(), r.x + 26.0f, r.y + r.h - 14.0f, 24, ink.with_alpha(a));
+        const std::string fitted(fonts.semibold.font->fit(value.c_str(), value_size, r.w - 52.0f));
+        ui::text(list, fonts.semibold, fitted.c_str(), r.x + 26.0f, r.y + r.h - 14.0f, value_size, ink.with_alpha(a));
     }
 
     // A small tag (4K, HDR ...); returns its width
@@ -2489,7 +2525,7 @@ class Shelf
         if (have && it.badges & ::jf::Item::kBadgeAtmos)
             cx += draw_chip(list, cx, meta_y - 8.0f, "ATMOS", kWhite.with_alpha(0.16f), kWhite) + 10.0f;
 
-        // The buttons: resume, from start, audio, subtitles
+        // The buttons: resume, from start, audio, subtitles, watched status
         const float press = launch_.running ? tween::ping(launch_.progress()) : 0.0f;
         const bool second = resumable();
         const bool can = it.playable;
@@ -2514,12 +2550,22 @@ class Shelf
                                  : second ? "Resume " + clock_text(it.resumeSeconds) : std::string("Play");
         const float row_y = panel.y + 196;
         const bool series = it.kindRaw == "Series";
-        float widths[4] = {second ? 262.0f : 300.0f, second ? 206.0f : 0.0f, second ? 214.0f : 322.0f, second ? 214.0f : 322.0f};
+        const bool can_mark = it.kindRaw == "Movie" || it.kindRaw == "Episode";
+        float widths[5] = {second ? 262.0f : 300.0f, second ? 206.0f : 0.0f,
+                           second ? 214.0f : 322.0f, second ? 214.0f : 322.0f, 0.0f};
+        if (can_mark)
+        {
+            widths[0] = second ? 195.0f : 220.0f;
+            widths[1] = second ? 154.0f : 0.0f;
+            widths[2] = second ? 180.0f : 220.0f;
+            widths[3] = second ? 180.0f : 220.0f;
+            widths[4] = second ? 187.0f : 250.0f;
+        }
         if (series)
             widths[0] = 300.0f, widths[1] = 300.0f, widths[2] = widths[3] = 0.0f;
         float bx = x;
         const float gap = second ? 14.0f : 14.0f;
-        for (int id = 0; id < 4; ++id)
+        for (int id = 0; id < 5; ++id)
         {
             if (widths[id] <= 0.0f)
                 continue;
@@ -2527,8 +2573,12 @@ class Shelf
             bx += widths[id] + gap;
             if (id <= 1 && focus_ == id && !reduced())
                 r = r.inset(-4.0f * press);
-            const char *caption = id == 0 ? (series ? "SEASON" : !can ? "BROWSE" : second ? "CONTINUE" : "WATCH") : id == 1 ? (series ? "WATCH" : "RESTART") : id == 2 ? "AUDIO" : "SUBTITLES";
-            std::string value = id == 0 ? play_value : id == 1 ? std::string("From start") : id == 2 ? audio_value : sub_value;
+            const char *caption = id == 0 ? (series ? "SEASON" : !can ? "BROWSE" : second ? "CONTINUE" : "WATCH")
+                                   : id == 1 ? (series ? "WATCH" : "RESTART")
+                                   : id == 2 ? "AUDIO" : id == 3 ? "SUBTITLES" : "MARK AS";
+            std::string value = id == 0 ? play_value : id == 1 ? std::string("From start")
+                                : id == 2 ? audio_value : id == 3 ? sub_value
+                                : it.watchedPending ? "Saving..." : it.watched ? "Unwatched" : "Watched";
             if (series)
             {
                 const JfGateSeason *chosen = season_state_ == 1 ? &seasons_[season_sel_] : nullptr;
@@ -2547,7 +2597,8 @@ class Shelf
                     value = "Episodes";
             }
             const bool enabled = id == 0 ? true : (can || (series && id == 1));
-            draw_pill(list, r, focus_ == id, enabled, caption, value, it.accent, breath);
+            draw_pill(list, r, focus_ == id, enabled, caption, value, it.accent, breath,
+                      can_mark && second ? 20.0f : 24.0f);
             if (series && id == 0)
             {
                 // a small arrow: this opens a list
@@ -2823,7 +2874,7 @@ class Shelf
         {
             const ui::Hint hints[] = {{ui::Button::left_stick, "Spin"},
                                       {ui::Button::dpad, "Step"},
-                                      {ui::Button::l1, "Letter", ui::Button::r1},
+                                      {ui::Button::l1, list_.kind == 6 ? "Letter" : "Sections", ui::Button::r1},
                                       {ui::Button::l2, "Jump", ui::Button::r2},
                                       {ui::Button::cross, "Open"},
                                       {ui::Button::triangle, "Favorite"},
@@ -2868,7 +2919,7 @@ class Shelf
     bool quiet_ = true;        // the current movement already had its sound
     bool against_end_ = false; // the wheel is past an end (refuse once)
     float tick_wait_ = 0.0f;   // seconds until the next tick may play
-    float letter_flash_ = 0.0f; // 1 right after an L1 / R1 jump, then fades
+    float letter_flash_ = 0.0f; // 1 right after a letter jump, then fades
     char letter_shown_ = '#';
 
     tween::Spring calm_; // 1 while the wheel is slow enough to read a caption
@@ -2879,7 +2930,8 @@ class Shelf
     Modal modal_ = Modal::none;
     Modal modal_shown_ = Modal::none; // what the fading page was
     float modal_amt_ = 0.0f;
-    int focus_ = 0; // 0 play, 1 from start, 2 audio, 3 subtitles, 4 summary, 5 QR
+    int focus_ = 0; // 0 play, 1 from start, 2 audio, 3 subtitles, 4 watched status
+    std::uint64_t season_revision_ = 0;
     JfGateSeason seasons_[JF_GATE_SEASONS] = {};
     int seasons_n_ = 0;
     int season_state_ = 0; // 0 asked, 1 here, -1 none
@@ -3662,10 +3714,23 @@ class CoverFlow final : public app::Concept
         // While one wheel slides out and the other in, presses wait
         const bool busy = slide_ < 0.5f;
         const bool had_tabs = tabs_focus_;
+        const bool previous_section = input.is_pressed(Action::page_prev);
+        const bool next_section = input.is_pressed(Action::page_next);
+        const bool shortcut_input = (previous_section || next_section) && overlay_ == Overlay::none &&
+            !shelf.is_open() && !is_browse();
+        const int shortcut = ::jf::sectionShortcut(overlay_ != Overlay::none, shelf.is_open(), is_browse(), busy,
+            previous_section, next_section);
         bool wheel_has_input = false;
         if (overlay_ != Overlay::none)
         {
             run_overlay(input, shelf, feedback);
+        }
+        else if (shortcut_input)
+        {
+            if (shortcut != 0)
+            {
+                move_tab(shortcut, false, feedback);
+            }
         }
         else if (!shelf.is_open() && !busy)
         {
@@ -3698,24 +3763,25 @@ class CoverFlow final : public app::Concept
         {
             // The Discover page has the pad whenever the tabs do not (not on the frame the tabs handed it over)
             const ::jf::DiscoverHooks &h = ::jf::discoverHooks();
-            const bool pad = !tabs_focus_ && !had_tabs && overlay_ == Overlay::none && !busy;
+            const bool pad = !tabs_focus_ && !had_tabs && overlay_ == Overlay::none && !busy && !shortcut_input;
             if (h.update && h.update(h.ctx, pad ? static_cast<const void *>(&input) : static_cast<const void *>(&neutral), dt, &feedback, pad))
             {
                 tabs_focus_ = true; // the page wants the tabs back
                 feedback.play(audio::Cue::focus, 0.9f, 0.0f, 0.8f);
             }
         }
-        shelf.update(wheel_has_input ? input : neutral, dt, feedback);
+        Shelf &current_shelf = *shelves_[static_cast<std::size_t>(active_)];
+        current_shelf.update(wheel_has_input ? input : neutral, dt, feedback);
         if (leaving_ >= 0)
         {
             app::Feedback silent;
             shelves_[static_cast<std::size_t>(leaving_)]->update(neutral, dt, silent);
         }
         // The hop waits for a wheel that has its titles
-        if (nudge_pending_ && shelf.ready())
+        if (nudge_pending_ && current_shelf.ready())
         {
             nudge_pending_ = false;
-            shelf.nudge();
+            current_shelf.nudge();
         }
 
         if (slide_ < 1.0f)
@@ -3732,7 +3798,7 @@ class CoverFlow final : public app::Concept
         tabs_amount_.update(dt, 16.0f);
 
         {
-            const Color glow = shelf.light_colour();
+            const Color glow = current_shelf.light_colour();
             ::jf::LightColour &lc = ::jf::lightColour();
             lc.r = glow.r;
             lc.g = glow.g;
@@ -3740,8 +3806,8 @@ class CoverFlow final : public app::Concept
         }
 
         // Tell the worker thread where we are looking
-        ::jf::view().category = shelf.category();
-        ::jf::view().centre = shelf.centre();
+        ::jf::view().category = current_shelf.category();
+        ::jf::view().centre = current_shelf.centre();
     }
 
     void draw(app::Frame &frame) const override
@@ -3930,8 +3996,7 @@ class CoverFlow final : public app::Concept
             // the profile picture at the end of the tabs
             if (input.nav == Direction::left)
             {
-                profile_focus_ = false;
-                feedback.play(audio::Cue::focus, 1.0f, -0.3f, 0.7f);
+                move_tab(-1, input.nav_repeat, feedback);
             }
             else if (input.is_pressed(Action::confirm))
             {
@@ -3961,48 +4026,55 @@ class CoverFlow final : public app::Concept
         if (input.nav == Direction::left || input.nav == Direction::right)
         {
             const int direction = input.nav == Direction::right ? 1 : -1;
-            bool moved = false;
-            if (disc_ && direction < 0)
-            {
-                // Discover sits after the last category: Left goes on to the last one, so the round keeps going
-                const int last_tab = tab_count() - 1;
-                set_disc(false);
-                if (last_tab >= 0 && active_ != last_tab && !is_browse())
-                {
-                    select(last_tab, feedback);
-                    leaving_ = -1; // the wheel we leave was not on show (Discover was): nothing slides out
-                }
-                else
-                    feedback.play(audio::Cue::tab, 0.95f, -0.4f);
+            move_tab(direction, input.nav_repeat, feedback);
+        }
+    }
+
+    void move_tab(int direction, bool repeat, app::Feedback &feedback)
+    {
+        if (has_search() && active_ == search_index() && !disc_ && !profile_focus_)
+        {
+            if (direction < 0 && select(std::min(before_search_, tab_count() - 1), feedback))
                 return;
-            }
-            if (direction < 0 && !disc_ && active_ == 0 && !is_browse() && ::jf::discoverEnabled())
+        }
+        else
+        {
+            const ::jf::SectionStep next = ::jf::sectionStep(tab_count(), active_, ::jf::discoverEnabled(),
+                                                            disc_, profile_focus_, direction);
+            if (next.destination == ::jf::SectionDestination::profile)
             {
-                set_disc(true); // left of the first category wraps round to Discover
-                feedback.play(audio::Cue::tab, 0.95f, -0.4f);
-                return;
-            }
-            if (direction > 0 && !disc_ && !(has_search() && active_ == search_index()) && active_ + 1 >= tab_count() && ::jf::discoverEnabled())
-            {
-                set_disc(true);
-                feedback.play(audio::Cue::tab, 1.05f, 0.4f);
-                return;
-            }
-            if (direction > 0 && !(has_search() && active_ == search_index()) && active_ + 1 >= tab_count())
-            {
-                profile_focus_ = true; // past the last tab: the profile picture
+                tabs_focus_ = true;
+                profile_focus_ = true;
                 feedback.play(audio::Cue::focus, 1.05f, 0.3f, 0.7f);
                 return;
             }
-            if (has_search() && active_ == search_index())
-                moved = direction < 0 && select(std::min(before_search_, tab_count() - 1), feedback);
-            else if (active_ + direction < tab_count())
-                moved = select(active_ + direction, feedback);
-            if (!moved && !input.nav_repeat)
+            if (next.destination == ::jf::SectionDestination::discover)
             {
-                feedback.play(audio::Cue::error, 1.0f, 0.4f * static_cast<float>(direction), 0.6f);
-                feedback.rumble(0.25f, 0.05f);
+                profile_focus_ = false;
+                set_disc(true);
+                feedback.play(audio::Cue::tab, 1.0f + 0.05f * direction, 0.4f * direction);
+                return;
             }
+            if (next.destination == ::jf::SectionDestination::section)
+            {
+                const bool was_disc = disc_;
+                profile_focus_ = false;
+                set_disc(false);
+                if (active_ != next.index)
+                {
+                    select(next.index, feedback);
+                    if (was_disc)
+                        leaving_ = -1;
+                }
+                else
+                    feedback.play(audio::Cue::focus, 1.0f, -0.3f, 0.7f);
+                return;
+            }
+        }
+        if (!repeat)
+        {
+            feedback.play(audio::Cue::error, 1.0f, 0.4f * static_cast<float>(direction), 0.6f);
+            feedback.rumble(0.25f, 0.05f);
         }
     }
 

@@ -88,6 +88,7 @@ public:
 	// The readings the frame's pad_poll took, folded into one input frame
 	// (the base class's render loop polls before render())
 	hui::InputFrame input();
+	bool remoteConfirmPressed() const { return remote_confirm_pressed_; }
 	// A test run's input: idle (the pad is ignored), or the presses its
 	// test-run.txt gives this program at this frame ("press <program> <frame>
 	// <action>", ps5_samples.h), for a recording
@@ -115,6 +116,8 @@ public:
 private:
 	hui::gfx::Font faces_[6];
 	std::vector<hui::PadSample> samples_;
+	hui::InputTracker remote_tracker_;
+	bool remote_confirm_pressed_ = false;
 	float rumble_left_ = 0.0f;
 	std::uint32_t light_bar_ = 0xffffffffu;
 	bool ready_ = false;

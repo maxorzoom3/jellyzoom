@@ -92,6 +92,7 @@ add_library(samples OBJECT
 	src/jf/jf_probe.cpp
 	src/jf/jf_avio.cpp
 	src/jf/jf_player.cpp
+	src/jf/jf_playback_features.cpp
 	src/jf/jf_locale.c
 	src/jf/jf_net.c
 	src/jf/jf_vdec_probe.c
@@ -181,7 +182,7 @@ endif()
 add_custom_command(
 	OUTPUT ${CMAKE_BINARY_DIR}/eboot.elf
 	COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/link-title.sh ${CMAKE_BINARY_DIR} ${PS5_VULKAN_DIR} ${PS5_PAYLOAD_SDK} "$<TARGET_OBJECTS:samples>" ${CMAKE_CURRENT_SOURCE_DIR}/src/jf/lib/libjf_deps.a ${JF_EXTRA_LIBS}
-	DEPENDS samples "$<TARGET_OBJECTS:samples>" ${CMAKE_CURRENT_SOURCE_DIR}/src/jf/lib/libjf_deps.a ${JF_EXTRA_LIBS} ${CMAKE_CURRENT_SOURCE_DIR}/tools/link-title.sh
+	DEPENDS samples "$<TARGET_OBJECTS:samples>" ${CMAKE_CURRENT_SOURCE_DIR}/src/jf/lib/libjf_deps.a ${JF_EXTRA_LIBS} ${CMAKE_CURRENT_SOURCE_DIR}/tools/link-title.sh ${CMAKE_CURRENT_SOURCE_DIR}/tools/title-local.map ${CMAKE_CURRENT_SOURCE_DIR}/tools/weak-defsyms.rsp ${CMAKE_CURRENT_SOURCE_DIR}/tools/stage-notices.py ${CMAKE_CURRENT_SOURCE_DIR}/licenses/LLVM-LICENSE.txt
 	COMMAND_EXPAND_LISTS
 	VERBATIM)
 add_custom_target(title ALL DEPENDS ${CMAKE_BINARY_DIR}/eboot.elf)

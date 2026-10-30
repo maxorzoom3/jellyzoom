@@ -6741,4 +6741,3 @@
 --defsym=wsi_WriteMicromapsPropertiesEXT=0
 --defsym=wsi_WriteResourceDescriptorsEXT=0
 --defsym=wsi_WriteSamplerDescriptorsEXT=0
---version-script=/mnt/data/ps5stack/title-local.map

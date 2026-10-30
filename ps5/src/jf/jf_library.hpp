@@ -49,6 +49,7 @@ struct Item
     bool hasPoster = false; // cover is this title's own picture
     bool favorite = false;  // a favourite of the user's, on the server too
     bool watched = false;   // the server's played flag
+    bool watchedPending = false;
     bool fresh = false;     // added to the server within the last two weeks
     char letter = '#';
     // Picture and sound flags, filled in once the server's full details are in (see JfGateDetails)
@@ -58,6 +59,7 @@ struct Item
     bool detailed = false;
     std::string titleText, kindText, overviewText, runtimeText;
     std::string kindRaw;   // the server's type: Movie, Series, Season, Episode, BoxSet ...
+    std::string id;
     std::string countText; // "3 seasons", "10 episodes", "4 titles": what a series, season or collection holds
 
     // Points the strings above at the std::strings below; call after filling them in
@@ -144,6 +146,16 @@ struct FavouriteRequest
 inline std::vector<FavouriteRequest> &favouriteRequests()
 {
     static std::vector<FavouriteRequest> instance;
+    return instance;
+}
+inline std::string &actionNotice()
+{
+    static std::string instance;
+    return instance;
+}
+inline std::uint64_t &watchedRevision()
+{
+    static std::uint64_t instance = 0;
     return instance;
 }
 struct ViewRequest
