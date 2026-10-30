@@ -51,6 +51,18 @@ def pinned(script, name):
     return m.group(1) if m else None
 
 
+def title_submodules(rev):
+    entry = git(ROOT, "ls-tree", rev, "external/glm").split(maxsplit=3)
+    if len(entry) != 4 or entry[3] != "external/glm":
+        raise ValueError("the title source does not contain external/glm")
+    mode, kind, revision, _ = entry
+    if (mode, kind) == ("040000", "tree"):
+        return {}
+    if (mode, kind) == ("160000", "commit"):
+        return {"external/glm": dict(remote="https://github.com/g-truc/glm", revision=revision)}
+    raise ValueError(f"unexpected external/glm git entry: {mode} {kind}")
+
+
 def write_text(dest, repo, rev, path):
     """A file of a repository at a revision, into the licenses folder."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -107,7 +119,6 @@ def main():
                  ("ps5/third_party/volk/LICENSE.md", "volk-LICENSE.md")]
     for path, dest in libraries:
         write_text(out / "title" / dest, ROOT, rev, path)
-    glm = git(ROOT, "ls-tree", rev, "external/glm").split()[2]
     parts.append(dict(
         id="title", name=f"{name}: its program, the foundation (Sascha Willems' Vulkan examples and base class, the PS5 layer) "
                          "and the libraries in its tree (Dear ImGui, libktx, tinygltf with stb_image and nlohmann json, "
@@ -117,7 +128,7 @@ def main():
         copyright=["Copyright (c) 2016-2026 Sascha Willems", "Copyright (C) 2026 Mihawk", "and each library's authors"],
         artifacts=["eboot.bin", "shaders/"], texts="licenses/title/",
         source=dict(kind="git", path=str(ROOT), remote=remote, revision=rev, dirty=dirty,
-                    submodules={"external/glm": dict(remote="https://github.com/g-truc/glm", revision=glm)})))
+                    submodules=title_submodules(rev))))
 
     # The UI kit, in a title that has the module
     if (PS5 / "ui/setup-kit.sh").exists():

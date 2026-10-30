@@ -74,6 +74,7 @@ On a Linux host with a C++17 compiler and the json-c development package install
 
 ```bash
 python3 ps5/tests/branding.py
+python3 ps5/tests/release_provenance.py
 c++ -std=c++17 ps5/tests/playback_features.cpp ps5/src/jf/jf_playback_features.cpp $(pkg-config --cflags --libs json-c) -o /tmp/mortalfin-playback-tests
 /tmp/mortalfin-playback-tests
 c++ -std=c++17 ps5/tests/subtitle_text.cpp -o /tmp/mortalfin-subtitle-tests
