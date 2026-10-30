@@ -3,6 +3,19 @@
 ## Unreleased
 
 - Security: the sign-in page warns when the server is plain http or the certificate check is off; the program never stores your password (only the sign-in token); the build checks the dav1d download and the PS5_Vulkan / PS5_Mesa / PS5_PayloadSDK checkouts against pins (ps5/tools/pin-deps.sh).
+
+## 1.1.0-beta.2
+
+The first rebranded Jellyzoom beta, forked from Mortalfin.
+
+- New Jellyzoom name, artwork and PS5 title ID, with separate settings and Jellyfin device identity. Existing Mortalfin
+  settings and credentials are not imported.
+- Intro and outro skip prompts, optional next-episode autoplay and server-generated trickplay previews.
+- Improved playback startup synchronization, with a 120 Hz HDR output attempt and 59.94 Hz fallback.
+- HDMI-CEC TV-remote support, L1/R1 main-section navigation, watched/unwatched controls and season posters.
+- Clearer text subtitles and filtering of invisible formatting marks.
+- HTTPS support when built with mbedTLS.
+
 ## 1.0.0-beta.5 (2026-10-16)
 
 ### TV shows and collections

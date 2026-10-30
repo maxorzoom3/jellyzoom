@@ -1,6 +1,10 @@
 <p align="center">
   <img src="docs/media/icon.png" alt="Jellyzoom" width="180"><br>
-  <b>A native Jellyfin client for jailbroken PS5 consoles.</b><br>
+</p>
+<h1 align="center">Jellyzoom</h1>
+<p align="center">
+  <b>Your Jellyfin library, at home on your PS5.</b><br>
+  A native client for jailbroken PS5 consoles.<br>
   Its own GPU-drawn interface, HDR playback, surround-sound passthrough, and no browser in between.
 </p>
 
@@ -38,6 +42,20 @@ Vulkan and made for the TV, and video played from your own server with HDR and y
 > **Beta.** Jellyzoom is in testing. It works, it has rough edges, and your bug reports are the point of this
 > release. See [docs/TESTING.md](docs/TESTING.md).
 
+## Jellyzoom highlights
+
+- **Skip intro and outro:** jump past segments when your Jellyfin server provides their metadata, with unobtrusive
+  prompts and optional next-episode autoplay.
+- **See where you're seeking:** trickplay thumbnails appear while scrubbing when the server has generated previews.
+- **Smoother HDR playback:** improved audio/video startup synchronization and a 120 Hz HDR output attempt on supported
+  displays, with a 59.94 Hz fallback if the HDR buffer is refused.
+- **TV-remote friendly:** navigate and control playback over HDMI-CEC, including using remote OK on skip prompts.
+- **Browse your way:** switch main sections with L1/R1, mark movies and episodes watched or unwatched, and see
+  season-specific posters in Continue Watching and Next Up.
+- **More readable subtitles:** stronger text outlines and filtering of invisible formatting marks.
+- **Made to coexist:** Jellyzoom has its own PS5 title ID, device identity and settings; it does not import or overwrite
+  Mortalfin's sign-in or preferences.
+
 **Contents:** [Features](#features) · [Installation](#installation) · [Controls](#controls) · [Seerr](#seerr-optional) ·
 [Formats and limits](#formats-and-limits) · [Troubleshooting](#troubleshooting) · [Privacy](#privacy) ·
 [Building](#building) · [Credits](#credits) · [Licence](#licence) · [Disclaimer](#disclaimer)
@@ -57,7 +75,9 @@ Vulkan and made for the TV, and video played from your own server with HDR and y
 - Audio and subtitle tracks, switched while the film plays
 - Text subtitles from the server and **picture subtitles (PGS, DVD)** drawn by the app, placed in the black bar of a
   widescreen film when they fit
-- Chapters, scrubbing on L2/R2, resume where you left off, and the next episode automatically if you want it
+- Chapters, scrubbing on L2/R2 with server-generated trickplay previews, resume where you left off, and the next episode
+  automatically if you want it
+- Intro and outro skip prompts when the server provides segment metadata
 - A playback-info panel (Options) with codec, range, peak brightness and what the sound output is doing
 
 **Sound**
@@ -88,7 +108,7 @@ Jellyzoom is not currently listed in the Homebrew Store; use the manual installa
 
 ### Install by hand
 
-1. Download `Jellyzoom-<version>.zip` from the [latest release](../../releases/latest) and unzip it. Inside is one
+1. Download `Jellyzoom-<version>.zip` from the [releases page](../../releases) and unzip it. Inside is one
    folder called `PPSA99483`.
 2. Start your jailbreak and its homebrew loader (and your FTP server, if you use FTP).
 3. Upload the `PPSA99483` folder to `/data/homebrew/` on the console, so that
@@ -101,6 +121,8 @@ Jellyzoom is not currently listed in the Homebrew Store; use the manual installa
 Jellyzoom remembers your accounts and settings separately from Mortalfin. It does not import Mortalfin settings or
 credentials: sign in and configure Jellyzoom on its first launch. The two apps use different title IDs and data files,
 although side-by-side installation still needs testing on a console.
+
+The older `1.1.0-beta.1` release contains a Mortalfin-branded build, not the rebranded Jellyzoom title.
 
 ### Update
 
@@ -135,6 +157,9 @@ resume position.
 When an intro skip prompt appears at the lower right, press Triangle or TV-remote OK to skip. The prompt fills and
 hides after eight seconds of playback; bring up the playback controls to show it again while the intro is still playing.
 Skipping does not wake hidden playback controls. Outro prompts use the same position and controls.
+
+With HDMI-CEC enabled, a compatible TV remote can navigate the library and playback controls; available playback
+buttons depend on the remote.
 
 ## Seerr (optional)
 
